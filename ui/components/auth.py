@@ -35,12 +35,13 @@ def render_login_form():
                         st.session_state.auth_token = result["access_token"]
                         st.session_state.user_info = result
                         # Store in browser localStorage
+                        import json
                         token = result["access_token"]
-                        user_info_str = str(result).replace("'", "\\")
+                        user_info_json = json.dumps(result).replace("'", "\\'").replace('"', '\\"')
                         st.markdown(f"""
                         <script>
                         localStorage.setItem('auth_token', '{token}');
-                        localStorage.setItem('user_info', '{user_info_str}')
+                        localStorage.setItem('user_info', '{user_info_json}')
                         </script>
                         """, unsafe_allow_html=True)
                         st.success("✅ Signed in successfully!")

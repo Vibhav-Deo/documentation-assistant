@@ -1,6 +1,7 @@
 import time
 import psutil
 import os
+import json
 from typing import Dict, List
 from datetime import datetime, timedelta
 from .redis_service import redis_service
@@ -61,7 +62,7 @@ class MonitoringService:
         }
         
         # Store individual request
-        redis_service.client.lpush("request_metrics", str(metrics))
+        redis_service.client.lpush("request_metrics", json.dumps(metrics))
         redis_service.client.expire("request_metrics", 86400)  # 24 hours
         
         # Update counters
@@ -87,7 +88,7 @@ class MonitoringService:
             
             for metric_str in metrics_data:
                 try:
-                    metric = eval(metric_str)  # In production, use json.loads
+                    metric = json.loads(metric_str)
                     metric_time = datetime.fromisoformat(metric["timestamp"])
                     
                     if metric_time < cutoff_time:
