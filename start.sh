@@ -38,6 +38,10 @@ if [ ! -f .env ]; then
     echo "⚠️  Please review and update .env file with your settings"
 fi
 
+# Stop any running services
+echo "🛑 Stopping any running Docker services..."
+docker compose down
+
 # Start services
 echo "🐳 Starting Docker services..."
 docker compose up -d

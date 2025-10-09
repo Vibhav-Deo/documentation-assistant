@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 from config import API_URL
-from components.auth import render_user_info
 
 def render_sidebar():
     """Render the sidebar configuration panel"""
@@ -45,6 +44,7 @@ def render_sidebar():
                 st.rerun()
         
         # User info
+        from components.auth import render_user_info
         render_user_info()
         
         return ai_settings
