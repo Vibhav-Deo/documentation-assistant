@@ -633,8 +633,20 @@ class DatabaseService:
         async with self.pool.acquire() as conn:
             # Extract ticket references from commit message
             import re
+            from dateutil import parser as date_parser
             ticket_pattern = r'\b([A-Z]{2,10}-\d+)\b'
             ticket_refs = re.findall(ticket_pattern, commit_data.get('message', ''))
+
+            # Parse commit date if it's a string
+            commit_date = commit_data.get('commit_date')
+            if isinstance(commit_date, str):
+                try:
+                    commit_date = date_parser.parse(commit_date)
+                    # Remove timezone info to make it naive (PostgreSQL TIMESTAMP requirement)
+                    if commit_date.tzinfo is not None:
+                        commit_date = commit_date.replace(tzinfo=None)
+                except Exception:
+                    commit_date = None
 
             row = await conn.fetchrow("""
                 INSERT INTO commits (
@@ -659,7 +671,7 @@ class DatabaseService:
                 commit_data.get('message'),
                 commit_data.get('author_name'),
                 commit_data.get('author_email'),
-                commit_data.get('commit_date'),
+                commit_date,
                 commit_data.get('files_changed', []),
                 commit_data.get('additions', 0),
                 commit_data.get('deletions', 0),
@@ -673,9 +685,41 @@ class DatabaseService:
         async with self.pool.acquire() as conn:
             # Extract ticket references from PR title and description
             import re
+            from dateutil import parser as date_parser
             ticket_pattern = r'\b([A-Z]{2,10}-\d+)\b'
             text = f"{pr_data.get('title', '')} {pr_data.get('description', '')}"
             ticket_refs = re.findall(ticket_pattern, text)
+
+            # Parse PR dates if they're strings
+            created_at = pr_data.get('created_at')
+            if isinstance(created_at, str):
+                try:
+                    created_at = date_parser.parse(created_at)
+                    # Remove timezone info to make it naive (PostgreSQL TIMESTAMP requirement)
+                    if created_at.tzinfo is not None:
+                        created_at = created_at.replace(tzinfo=None)
+                except Exception:
+                    created_at = None
+
+            merged_at = pr_data.get('merged_at')
+            if isinstance(merged_at, str):
+                try:
+                    merged_at = date_parser.parse(merged_at)
+                    # Remove timezone info to make it naive
+                    if merged_at.tzinfo is not None:
+                        merged_at = merged_at.replace(tzinfo=None)
+                except Exception:
+                    merged_at = None
+
+            closed_at = pr_data.get('closed_at')
+            if isinstance(closed_at, str):
+                try:
+                    closed_at = date_parser.parse(closed_at)
+                    # Remove timezone info to make it naive
+                    if closed_at.tzinfo is not None:
+                        closed_at = closed_at.replace(tzinfo=None)
+                except Exception:
+                    closed_at = None
 
             row = await conn.fetchrow("""
                 INSERT INTO pull_requests (
@@ -701,9 +745,9 @@ class DatabaseService:
                 pr_data.get('description'),
                 pr_data.get('author_name'),
                 pr_data.get('state'),
-                pr_data.get('created_at'),
-                pr_data.get('merged_at'),
-                pr_data.get('closed_at'),
+                created_at,
+                merged_at,
+                closed_at,
                 pr_data.get('commit_shas', []),
                 ticket_refs,
                 json.dumps(pr_data.get('metadata', {}))

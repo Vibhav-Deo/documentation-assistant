@@ -40,6 +40,7 @@ from services.database import db_service
 from services.redis_service import redis_service
 from services.oauth import oauth_service
 from services.monitoring import monitoring_service
+from services.relationship_service import RelationshipService
 
 # Initialize services
 cache_service = SimpleCache()
@@ -49,10 +50,16 @@ search_service = SearchService(qdrant, embedder)
 document_service = DocumentService(qdrant, embedder)
 ai_service = AIService()
 
+# Relationship service will be initialized after database pool is ready
+relationship_service = None
+
 # Initialize database on startup
 @app.on_event("startup")
 async def startup_event():
+    global relationship_service
     await db_service.init_pool()
+    # Initialize relationship service after database pool is ready
+    relationship_service = RelationshipService(db_service)
 
 @app.get("/health")
 def health_check():
@@ -831,4 +838,181 @@ async def get_repository_files(
             "count": len(files)
         }
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================
+# Relationship and Knowledge Graph Endpoints
+# ============================================
+
+@app.get("/relationships/ticket/{ticket_key}")
+async def get_ticket_relationships(
+    ticket_key: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get all relationships for a Jira ticket
+
+    Returns:
+    - Related commits
+    - Related pull requests
+    - Related documents
+    - Related code files
+    - Related developers
+    - Complete timeline
+    """
+    try:
+        relationships = await relationship_service.get_ticket_relationships(
+            ticket_key,
+            current_user.organization_id
+        )
+        return relationships
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"ERROR in get_ticket_relationships: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/relationships/developer/{developer_email}")
+async def get_developer_contributions(
+    developer_email: str,
+    limit: int = 100,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get all contributions by a developer
+
+    Returns:
+    - Commits authored
+    - Pull requests created
+    - Tickets worked on
+    - Code files modified
+    - Statistics
+    """
+    try:
+        contributions = await relationship_service.get_developer_contributions(
+            developer_email,
+            current_user.organization_id,
+            limit
+        )
+        return contributions
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/relationships/file")
+async def get_file_history(
+    file_path: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get complete history of a code file
+
+    Returns:
+    - All commits that modified the file
+    - Developers who worked on it
+    - Related tickets
+    - Timeline
+    """
+    try:
+        history = await relationship_service.get_file_history(
+            file_path,
+            current_user.organization_id
+        )
+        return history
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/relationships/repository/{repo_id}/stats")
+async def get_repository_stats(
+    repo_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get comprehensive statistics for a repository
+
+    Returns:
+    - Commit stats
+    - PR stats
+    - File stats
+    - Top contributors
+    - Related tickets
+    """
+    try:
+        stats = await relationship_service.get_repository_stats(
+            repo_id,
+            current_user.organization_id
+        )
+
+        if not stats:
+            raise HTTPException(status_code=404, detail="Repository not found")
+
+        return stats
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"ERROR in get_repository_stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/relationships/timeline/{ticket_key}")
+async def get_feature_timeline(
+    ticket_key: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get complete chronological timeline for a feature/ticket
+
+    Returns:
+    - Ticket creation
+    - All commits
+    - All pull requests
+    - Document updates
+    - Sorted chronologically
+    """
+    try:
+        timeline = await relationship_service.get_feature_timeline(
+            ticket_key,
+            current_user.organization_id
+        )
+        return {
+            "ticket_key": ticket_key,
+            "timeline": timeline,
+            "count": len(timeline)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/relationships/search")
+async def search_relationships(
+    query: str,
+    entity_types: str = "commits,prs,tickets,files",
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Search across all entities and return relationships
+
+    Query parameters:
+    - query: Search term
+    - entity_types: Comma-separated list (commits,prs,tickets,files,documents)
+
+    Returns:
+    - Matching commits
+    - Matching pull requests
+    - Matching tickets
+    - Matching files
+    - Matching documents
+    """
+    try:
+        entity_list = [t.strip() for t in entity_types.split(',')]
+
+        results = await relationship_service.search_relationships(
+            query,
+            current_user.organization_id,
+            entity_list
+        )
+        return results
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"ERROR in search_relationships: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

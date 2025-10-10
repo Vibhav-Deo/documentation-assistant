@@ -40,13 +40,18 @@ def render_sidebar():
         
         # Controls
         render_controls()
-        
+
+        # Knowledge Graph Explorer
+        if st.button("🔗 Knowledge Graph", use_container_width=True, key="relationships_btn"):
+            st.session_state.show_relationships = True
+            st.rerun()
+
         # Admin panel link
         if "user_info" in st.session_state and st.session_state.user_info["user"]["role"] == "admin":
             if st.button("🛠️ Admin Panel", use_container_width=True, key="admin_panel_btn"):
                 st.session_state.show_admin = True
                 st.rerun()
-        
+
         # User info
         from components.auth import render_user_info
         render_user_info()
