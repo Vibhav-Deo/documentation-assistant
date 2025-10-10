@@ -5,29 +5,33 @@ from config import API_URL
 def render_sidebar():
     """Render the sidebar configuration panel"""
     with st.sidebar:
-        st.header("⚙️ Configuration")
-        
-        # Source type selection
-        source_type = st.selectbox("📂 Source Type", ["confluence", "public"])
-        
-        # Configuration based on source type
-        if source_type == "confluence":
+        st.header("📥 Data Sources")
+
+        # Tabs for different data sources
+        tab1, tab2, tab3 = st.tabs(["📄 Docs", "🎫 Jira", "💻 Code"])
+
+        with tab1:
+            # Confluence only for internal documentation
             sync_config = render_confluence_config()
             can_sync = all([
                 sync_config["confluence_base_url"],
-                sync_config["confluence_username"], 
+                sync_config["confluence_username"],
                 sync_config["confluence_api_token"],
                 sync_config["space_key_or_url"]
             ])
-        else:
-            sync_config = render_public_config()
-            can_sync = bool(sync_config["space_key_or_url"].strip())
-        
-        # Sync button
-        if st.button("🔄 Sync Documentation", use_container_width=True, disabled=not can_sync):
-            handle_sync(sync_config)
-        
-        st.caption("📝 Syncing is optional - you can ask general questions without it")
+
+            # Sync button
+            if st.button("🔄 Sync Confluence Documentation", use_container_width=True, disabled=not can_sync):
+                handle_sync(sync_config)
+
+            st.caption("💡 Sync internal Confluence docs to answer questions about your team's documentation")
+
+        with tab2:
+            render_jira_sync()
+
+        with tab3:
+            render_repository_sync()
+
         st.divider()
         
         # AI Settings
@@ -63,16 +67,6 @@ def render_confluence_config():
         "confluence_base_url": confluence_url,
         "confluence_username": confluence_user,
         "confluence_api_token": confluence_token
-    }
-
-def render_public_config():
-    """Render public URL configuration form"""
-    st.subheader("🌐 Public URL Settings")
-    public_url = st.text_input("URL to Sync", placeholder="https://example.com/docs")
-    
-    return {
-        "source_type": "public",
-        "space_key_or_url": public_url
     }
 
 def render_ai_settings():
@@ -129,19 +123,240 @@ def handle_sync(sync_config):
             headers = {}
             if "auth_token" in st.session_state:
                 headers["Authorization"] = f"Bearer {st.session_state.auth_token}"
-            
+
             r = requests.post(f"{API_URL}/sync", json=sync_config, headers=headers, timeout=60)
-            
+
             if r.status_code == 401:
                 st.error("❌ Authentication required")
                 return
             elif r.status_code == 429:
                 st.error("❌ Monthly quota exceeded")
                 return
-            
-            r.raise_for_status()
+            elif r.status_code >= 400:
+                # Extract error detail from API response
+                try:
+                    error_detail = r.json().get('detail', 'Unknown error')
+                    st.error(f"❌ Sync failed: {error_detail}")
+                except:
+                    st.error(f"❌ Sync failed: HTTP {r.status_code}")
+                return
+
             result = r.json()
             count = result.get('pages', result.get('chunks', 0))
             st.success(f"✅ Synced {count} documents for enhanced answers")
+        except requests.exceptions.RequestException as e:
+            st.error(f"❌ Sync failed: {str(e)}")
         except Exception as e:
-            st.error(f"❌ Sync failed: {e}")
+            st.error(f"❌ Unexpected error: {str(e)}")
+
+def render_jira_sync():
+    """Render Jira synchronization panel"""
+    st.subheader("🎫 Jira Integration")
+
+    jira_server = st.text_input(
+        "Jira Server",
+        placeholder="https://your-domain.atlassian.net",
+        key="jira_server"
+    )
+    jira_email = st.text_input(
+        "Email",
+        placeholder="your.email@company.com",
+        key="jira_email"
+    )
+    jira_token = st.text_input(
+        "API Token",
+        type="password",
+        placeholder="Your Jira API token",
+        key="jira_token"
+    )
+    jira_project = st.text_input(
+        "Project Key",
+        placeholder="PROJ",
+        key="jira_project"
+    )
+
+    can_sync_jira = all([jira_server, jira_email, jira_token, jira_project])
+
+    if st.button("🔄 Sync Jira Project", use_container_width=True, disabled=not can_sync_jira):
+        with st.spinner("Syncing Jira tickets..."):
+            try:
+                headers = {}
+                if "auth_token" in st.session_state:
+                    headers["Authorization"] = f"Bearer {st.session_state.auth_token}"
+
+                response = requests.post(
+                    f"{API_URL}/sync/jira",
+                    json={
+                        "server": jira_server,
+                        "email": jira_email,
+                        "api_token": jira_token,
+                        "project_key": jira_project
+                    },
+                    headers=headers,
+                    timeout=120
+                )
+
+                if response.status_code == 401:
+                    st.error("❌ Authentication failed - check Jira credentials")
+                    return
+                elif response.status_code == 429:
+                    st.error("❌ Monthly quota exceeded")
+                    return
+                elif response.status_code >= 400:
+                    # Extract error detail from API response
+                    try:
+                        error_detail = response.json().get('detail', 'Unknown error')
+                        st.error(f"❌ Jira sync failed: {error_detail}")
+                    except:
+                        st.error(f"❌ Jira sync failed: HTTP {response.status_code}")
+                    return
+
+                result = response.json()
+
+                st.success(f"✅ Synced {result['tickets_synced']} tickets from {result['project_key']}")
+                st.session_state.show_jira_tickets = True
+
+            except requests.exceptions.RequestException as e:
+                st.error(f"❌ Network error: {str(e)}")
+            except Exception as e:
+                st.error(f"❌ Unexpected error: {str(e)}")
+
+    # Button to view/hide synced tickets
+    st.divider()
+    if st.button("📋 View Synced Tickets", use_container_width=True):
+        st.session_state.show_jira_tickets = not st.session_state.get("show_jira_tickets", False)
+
+    # Show synced tickets
+    if st.session_state.get("show_jira_tickets", False):
+        try:
+            headers = {}
+            if "auth_token" in st.session_state:
+                headers["Authorization"] = f"Bearer {st.session_state.auth_token}"
+
+            response = requests.get(
+                f"{API_URL}/jira/tickets?limit=10",
+                headers=headers
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                st.write(f"**Total Tickets**: {data['count']}")
+
+                for ticket in data['tickets'][:5]:
+                    with st.expander(f"{ticket['ticket_key']}: {ticket['summary']}"):
+                        st.write(f"**Status**: {ticket['status']}")
+                        st.write(f"**Type**: {ticket['issue_type']}")
+                        if ticket.get('assignee'):
+                            st.write(f"**Assignee**: {ticket['assignee']}")
+        except Exception as e:
+            st.error(f"Failed to load tickets: {str(e)}")
+
+    st.caption("💡 Sync Jira tickets to answer questions about your project management")
+
+def render_repository_sync():
+    """Render Repository synchronization panel"""
+    st.subheader("💻 Repository Integration")
+
+    provider = st.selectbox(
+        "Provider",
+        ["github", "gitlab", "bitbucket"],
+        key="repo_provider"
+    )
+
+    repo_url = st.text_input(
+        "Repository URL",
+        placeholder="https://github.com/owner/repo",
+        key="repo_url"
+    )
+
+    access_token = st.text_input(
+        "Access Token",
+        type="password",
+        placeholder="Your personal access token",
+        key="repo_token",
+        help="Generate token at: GitHub Settings → Developer settings → Personal access tokens"
+    )
+
+    branch = st.text_input(
+        "Branch",
+        value="main",
+        key="repo_branch"
+    )
+
+    can_sync_repo = all([provider, repo_url, access_token])
+
+    if st.button("🔄 Sync Repository", use_container_width=True, disabled=not can_sync_repo):
+        with st.spinner("Syncing repository files..."):
+            try:
+                headers = {}
+                if "auth_token" in st.session_state:
+                    headers["Authorization"] = f"Bearer {st.session_state.auth_token}"
+
+                response = requests.post(
+                    f"{API_URL}/sync/repository",
+                    json={
+                        "provider": provider,
+                        "repo_url": repo_url,
+                        "access_token": access_token,
+                        "branch": branch
+                    },
+                    headers=headers,
+                    timeout=180  # 3 minutes for repo sync
+                )
+
+                if response.status_code == 401:
+                    st.error("❌ Authentication failed - check repository credentials")
+                    return
+                elif response.status_code == 429:
+                    st.error("❌ Monthly quota exceeded")
+                    return
+                elif response.status_code >= 400:
+                    try:
+                        error_detail = response.json().get('detail', 'Unknown error')
+                        st.error(f"❌ Repository sync failed: {error_detail}")
+                    except:
+                        st.error(f"❌ Repository sync failed: HTTP {response.status_code}")
+                    return
+
+                result = response.json()
+
+                st.success(f"✅ Synced {result['files_synced']} files from {result['repo_name']} ({result['provider']})")
+                st.session_state.show_repo_files = True
+
+            except requests.exceptions.RequestException as e:
+                st.error(f"❌ Network error: {str(e)}")
+            except Exception as e:
+                st.error(f"❌ Unexpected error: {str(e)}")
+
+    # Button to view/hide synced repositories
+    st.divider()
+    if st.button("📁 View Synced Repositories", use_container_width=True):
+        st.session_state.show_repositories = not st.session_state.get("show_repositories", False)
+
+    # Show synced repositories
+    if st.session_state.get("show_repositories", False):
+        try:
+            headers = {}
+            if "auth_token" in st.session_state:
+                headers["Authorization"] = f"Bearer {st.session_state.auth_token}"
+
+            response = requests.get(
+                f"{API_URL}/repositories",
+                headers=headers
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                st.write(f"**Total Repositories**: {data['count']}")
+
+                for repo in data['repositories'][:5]:
+                    with st.expander(f"{repo['repo_name']} ({repo['provider']})"):
+                        st.write(f"**URL**: {repo['repo_url']}")
+                        st.write(f"**Branch**: {repo['branch']}")
+                        st.write(f"**Files**: {repo['file_count']}")
+                        if repo.get('last_synced'):
+                            st.write(f"**Last Synced**: {repo['last_synced']}")
+        except Exception as e:
+            st.error(f"Failed to load repositories: {str(e)}")
+
+    st.caption("💡 Sync code repositories to answer questions about your codebase")

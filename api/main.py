@@ -6,7 +6,7 @@ from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 
 # Import modules
-from models import SyncRequest, Query, LoginRequest, RegisterRequest, User, UserRole, Organization
+from models import SyncRequest, Query, LoginRequest, RegisterRequest, User, UserRole, Organization, JiraSyncRequest, RepositorySyncRequest
 from config import QDRANT_HOST, QDRANT_PORT
 from services.cache import SimpleCache
 from services.conversation import SimpleConversation
@@ -394,14 +394,11 @@ async def sync_docs(request: SyncRequest, current_user: User = Depends(get_curre
         for title, text in pages:
             chunks = chunk_text(text)
             document_service.store_chunks(title, chunks, "confluence", current_user.organization_id)
-        
+
         return {"status": "synced", "pages": len(pages)}
-    
-    elif request.source_type == "public":
-        return document_service.sync_public_url(request.space_key_or_url, current_user.organization_id)
-    
+
     else:
-        raise HTTPException(status_code=400, detail=f"Unsupported source type: {request.source_type}")
+        raise HTTPException(status_code=400, detail=f"Unsupported source type: {request.source_type}. Only 'confluence' is supported.")
 
 @app.post("/ask")
 async def ask(query: Query, current_user: User = Depends(get_current_user)):
@@ -423,19 +420,140 @@ async def ask(query: Query, current_user: User = Depends(get_current_user)):
         # Get conversation context
         context_history = conversation_service.get_context(query.session_id) if query.session_id else ""
         
-        # Enhanced search with organization isolation
+        # Search documentation
         try:
-            results = search_service.enhanced_search(
+            doc_results = search_service.enhanced_search(
                 query.question, 
                 query.search_type, 
                 query.max_results, 
                 current_user.organization_id
             )
-        except Exception:
-            results = []
+        except Exception as e:
+            print(f"Error searching docs: {e}")
+            doc_results = []
         
-        # Handle case with no documents
-        if not results:
+        # Search Jira tickets
+        try:
+            jira_tickets = await db_service.search_jira_tickets(
+                query.question,
+                current_user.organization_id,
+                limit=3
+            )
+            print(f"Found {len(jira_tickets)} Jira tickets for query: {query.question}")
+            if jira_tickets:
+                print(f"  Tickets: {[t['ticket_key'] for t in jira_tickets]}")
+        except Exception as e:
+            print(f"Error searching Jira tickets: {e}")
+            jira_tickets = []
+
+        # Search code files
+        try:
+            code_files = await db_service.search_code_files(
+                query.question,
+                current_user.organization_id,
+                limit=3
+            )
+            print(f"Found {len(code_files)} code files for query: {query.question}")
+            if code_files:
+                print(f"  Files: {[f['file_path'] for f in code_files]}")
+        except Exception as e:
+            print(f"Error searching code files: {e}")
+            code_files = []
+
+        # Build combined context
+        context_parts = []
+        sources = []
+        
+        # Check query type
+        import re
+        ticket_key_pattern = r'\b([A-Z]{2,10}-\d+)\b'
+        has_ticket_key = bool(re.search(ticket_key_pattern, query.question.upper()))
+        jira_terms = ['ticket', 'jira', 'bug', 'story', 'task', 'epic', 'sprint']
+        is_jira_query = has_ticket_key or any(term in query.question.lower() for term in jira_terms)
+
+        # Check if query is about code
+        code_terms = ['function', 'class', 'code', 'implement', 'file', 'module', 'import', 'def ', 'async ', 'const ', 'var ', 'let ']
+        is_code_query = any(term in query.question.lower() for term in code_terms)
+        
+        # Build context with intelligent prioritization
+        if code_files and is_code_query:
+            # For code-specific queries, prioritize code files
+            context_parts.append("=== Code Examples ===")
+            for code_file in code_files:
+                code_text = f"File: {code_file['file_path']}\n"
+                code_text += f"Language: {code_file.get('language', 'unknown')}\n"
+                if code_file.get('functions'):
+                    code_text += f"Functions: {', '.join(code_file['functions'][:5])}\n"
+                if code_file.get('classes'):
+                    code_text += f"Classes: {', '.join(code_file['classes'][:5])}\n"
+                # Add relevant code snippet
+                if code_file.get('content'):
+                    code_text += f"\nCode:\n```\n{code_file['content'][:800]}\n```"
+                context_parts.append(code_text)
+                sources.append(f"Code: {code_file['file_path']}")
+
+            # Add docs as supplementary
+            if doc_results:
+                relevant_docs = [hit for hit in doc_results if hit.score > 0.7]
+                if relevant_docs:
+                    context_parts.append("\n=== Related Documentation ===")
+                    for hit in relevant_docs[:2]:
+                        context_parts.append(hit.payload["text"])
+                        sources.append(hit.payload.get("title", "Unknown source"))
+
+        elif jira_tickets and is_jira_query:
+            # For Jira-specific queries, prioritize Jira tickets
+            context_parts.append("=== Jira Tickets ===")
+            for ticket in jira_tickets:
+                ticket_text = f"Ticket {ticket['ticket_key']}: {ticket['summary']}\n"
+                if ticket.get('description'):
+                    ticket_text += f"Description: {ticket['description'][:500]}\n"
+                ticket_text += f"Status: {ticket['status']}, Type: {ticket['issue_type']}"
+                if ticket.get('assignee'):
+                    ticket_text += f", Assignee: {ticket['assignee']}"
+                context_parts.append(ticket_text)
+                sources.append(f"Jira: {ticket['ticket_key']}")
+
+            # Add docs if highly relevant
+            if doc_results:
+                relevant_docs = [hit for hit in doc_results if hit.score > 0.7]
+                if relevant_docs:
+                    context_parts.append("\n=== Related Documentation ===")
+                    for hit in relevant_docs[:2]:
+                        context_parts.append(hit.payload["text"])
+                        sources.append(hit.payload.get("title", "Unknown source"))
+
+        else:
+            # For general queries, prioritize documentation
+            if doc_results:
+                context_parts.append("=== Documentation ===")
+                for hit in doc_results:
+                    context_parts.append(hit.payload["text"])
+                    sources.append(hit.payload.get("title", "Unknown source"))
+
+            # Add code files as supplementary
+            if code_files:
+                context_parts.append("\n=== Related Code ===")
+                for code_file in code_files[:2]:
+                    code_text = f"File: {code_file['file_path']} ({code_file.get('language', 'unknown')})"
+                    if code_file.get('functions'):
+                        code_text += f"\nFunctions: {', '.join(code_file['functions'][:3])}"
+                    context_parts.append(code_text)
+                    sources.append(f"Code: {code_file['file_path']}")
+
+            # Add Jira tickets as supplementary
+            if jira_tickets:
+                context_parts.append("\n=== Related Jira Tickets ===")
+                for ticket in jira_tickets:
+                    ticket_text = f"Ticket {ticket['ticket_key']}: {ticket['summary']}\n"
+                    if ticket.get('description'):
+                        ticket_text += f"Description: {ticket['description'][:300]}\n"
+                    ticket_text += f"Status: {ticket['status']}"
+                    context_parts.append(ticket_text)
+                    sources.append(f"Jira: {ticket['ticket_key']}")
+        
+        # Handle case with no data
+        if not context_parts:
             prompt = ai_service.build_prompt(query.question, "", context_history)
             answer = ai_service.generate_response(prompt, query.model)
             
@@ -443,7 +561,7 @@ async def ask(query: Query, current_user: User = Depends(get_current_user)):
             conversation_service.add_message(session_id, query.question, answer, [])
             
             response = {
-                "answer": answer + "\n\n*Note: This response is based on general knowledge. For more specific answers, consider syncing relevant documentation.*",
+                "answer": answer + "\n\n*Note: This response is based on general knowledge. For more specific answers, consider syncing relevant documentation and Jira tickets.*",
                 "sources": [],
                 "session_id": session_id
             }
@@ -460,12 +578,10 @@ async def ask(query: Query, current_user: User = Depends(get_current_user)):
             
             return response
 
-        # Build context from search results
-        context = "\n\n".join(hit.payload["text"] for hit in results)
+        # Build context and generate answer
+        context = "\n\n".join(context_parts)
         prompt = ai_service.build_prompt(query.question, context, context_history)
         answer = ai_service.generate_response(prompt, query.model)
-        
-        sources = list({hit.payload.get("title", "Unknown source") for hit in results})
         
         # Store conversation
         session_id = query.session_id or conversation_service.create_session()
@@ -473,15 +589,15 @@ async def ask(query: Query, current_user: User = Depends(get_current_user)):
         
         response = {
             "answer": answer, 
-            "sources": sources,
+            "sources": list(set(sources)),
             "session_id": session_id
         }
         
         # Cache and log
         cache_service.set(query.question, response)
         analytics_service.log_query(
-            query.question, 
-            len(results), 
+            query.question,
+            len(doc_results) + len(jira_tickets) + len(code_files),
             time.time() - start_time,
             query.model,
             query.search_type,
@@ -495,3 +611,196 @@ async def ask(query: Query, current_user: User = Depends(get_current_user)):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.post("/sync/jira")
+async def sync_jira(
+    request: JiraSyncRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Sync Jira project tickets"""
+    try:
+        # Import Jira service
+        from services.integrations.jira_service import JiraService
+
+        # Initialize Jira client
+        jira_service = JiraService(
+            request.server,
+            request.email,
+            request.api_token
+        )
+
+        # Test connection
+        if not jira_service.test_connection():
+            raise HTTPException(status_code=401, detail="Failed to connect to Jira. Check credentials.")
+
+        # Sync project tickets
+        tickets = jira_service.sync_project(request.project_key)
+
+        # Store tickets in database
+        tickets_created = 0
+        tickets_updated = 0
+
+        for ticket_data in tickets:
+            try:
+                result = await db_service.create_jira_ticket(ticket_data, current_user.organization_id)
+                # Check if it was an insert or update by checking if ticket existed
+                tickets_created += 1
+            except Exception as e:
+                print(f"Error storing ticket {ticket_data.get('key')}: {e}")
+                continue
+
+        # Log audit event
+        await db_service.log_audit(
+            current_user.id,
+            current_user.organization_id,
+            "jira_sync",
+            "sync",
+            {
+                "project": request.project_key,
+                "tickets_synced": len(tickets),
+                "server": request.server
+            }
+        )
+
+        return {
+            "status": "success",
+            "tickets_synced": len(tickets),
+            "project_key": request.project_key,
+            "server": request.server
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to sync Jira: {str(e)}")
+
+@app.get("/jira/tickets")
+async def get_jira_tickets(
+    limit: int = 100,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user)
+):
+    """Get all Jira tickets for the organization"""
+    try:
+        tickets = await db_service.get_jira_tickets(current_user.organization_id, limit, offset)
+        total_count = await db_service.count_jira_tickets(current_user.organization_id)
+        return {
+            "tickets": tickets,
+            "count": len(tickets),
+            "total": total_count,
+            "offset": offset,
+            "limit": limit
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/sync/repository")
+async def sync_repository(
+    request: RepositorySyncRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Sync code repository (GitHub, GitLab, Bitbucket)"""
+    try:
+        from services.integrations.repo_service import RepositoryService
+
+        # Initialize repository service
+        repo_service = RepositoryService(
+            request.provider,
+            request.repo_url,
+            request.access_token,
+            request.branch
+        )
+
+        # Test connection
+        if not repo_service.test_connection():
+            raise HTTPException(status_code=401, detail="Failed to connect to repository. Check credentials and URL.")
+
+        # Extract repo name
+        repo_name = repo_service.repo
+
+        # Sync repository files
+        file_data_list = repo_service.sync_repository(max_files=500)
+
+        # Create repository record
+        repo_data = {
+            'repo_url': request.repo_url,
+            'repo_name': repo_name,
+            'provider': request.provider,
+            'branch': request.branch,
+            'file_count': len(file_data_list),
+            'metadata': {
+                'owner': repo_service.owner,
+                'synced_files': len(file_data_list)
+            }
+        }
+
+        repo_record = await db_service.create_repository(repo_data, current_user.organization_id)
+
+        # Store code files in database
+        files_created = 0
+        for file_data in file_data_list:
+            try:
+                await db_service.create_code_file(file_data, repo_record['id'], current_user.organization_id)
+                files_created += 1
+            except Exception as e:
+                print(f"Error storing file {file_data.get('file_path')}: {e}")
+                continue
+
+        # Log audit event
+        await db_service.log_audit(
+            current_user.id,
+            current_user.organization_id,
+            "repository_sync",
+            "sync",
+            {
+                "repo_url": request.repo_url,
+                "provider": request.provider,
+                "files_synced": files_created,
+                "branch": request.branch
+            }
+        )
+
+        return {
+            "status": "success",
+            "files_synced": files_created,
+            "repo_name": repo_name,
+            "repo_url": request.repo_url,
+            "provider": request.provider,
+            "branch": request.branch
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to sync repository: {str(e)}")
+
+@app.get("/repositories")
+async def get_repositories(current_user: User = Depends(get_current_user)):
+    """Get all synced repositories for the organization"""
+    try:
+        repos = await db_service.get_repositories(current_user.organization_id)
+        return {
+            "repositories": repos,
+            "count": len(repos)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/repositories/{repo_id}/files")
+async def get_repository_files(
+    repo_id: str,
+    limit: int = 100,
+    current_user: User = Depends(get_current_user)
+):
+    """Get code files for a specific repository"""
+    try:
+        files = await db_service.get_code_files(repo_id, current_user.organization_id, limit)
+        return {
+            "files": files,
+            "count": len(files)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

@@ -16,9 +16,13 @@ def main():
     # Initialize session state from browser storage if available
     if "auth_token" not in st.session_state:
         # Try to restore from query params (for development)
-        query_params = st.query_params
-        if "token" in query_params:
-            st.session_state.auth_token = query_params["token"]
+        try:
+            query_params = st.query_params
+            if "token" in query_params:
+                st.session_state.auth_token = query_params["token"]
+        except Exception:
+            # Ignore query params if not available
+            pass
     
     # Check authentication
     if not check_authentication():

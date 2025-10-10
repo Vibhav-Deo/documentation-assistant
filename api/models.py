@@ -54,3 +54,15 @@ class Query(BaseModel):
     model: Optional[str] = "mistral"
     max_results: Optional[int] = 5
     search_type: Optional[str] = "semantic"
+
+class JiraSyncRequest(BaseModel):
+    server: str  # e.g., "https://your-domain.atlassian.net"
+    email: EmailStr
+    api_token: str
+    project_key: str  # e.g., "PROJ"
+
+class RepositorySyncRequest(BaseModel):
+    provider: str  # "github", "gitlab", "bitbucket"
+    repo_url: str  # e.g., "https://github.com/owner/repo"
+    access_token: str  # Personal access token
+    branch: Optional[str] = "main"
