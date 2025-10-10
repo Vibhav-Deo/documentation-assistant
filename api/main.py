@@ -747,6 +747,30 @@ async def sync_repository(
                 print(f"Error storing file {file_data.get('file_path')}: {e}")
                 continue
 
+        # Fetch and store commit history
+        print(f"Fetching commit history for {repo_name}...")
+        commits = repo_service.fetch_commit_history(max_commits=500)
+        commits_created = 0
+        for commit_data in commits:
+            try:
+                await db_service.create_commit(commit_data, repo_record['id'], current_user.organization_id)
+                commits_created += 1
+            except Exception as e:
+                print(f"Error storing commit {commit_data.get('sha')}: {e}")
+                continue
+
+        # Fetch and store pull requests
+        print(f"Fetching pull requests for {repo_name}...")
+        prs = repo_service.fetch_pull_requests(max_prs=100)
+        prs_created = 0
+        for pr_data in prs:
+            try:
+                await db_service.create_pull_request(pr_data, repo_record['id'], current_user.organization_id)
+                prs_created += 1
+            except Exception as e:
+                print(f"Error storing PR #{pr_data.get('pr_number')}: {e}")
+                continue
+
         # Log audit event
         await db_service.log_audit(
             current_user.id,
@@ -757,6 +781,8 @@ async def sync_repository(
                 "repo_url": request.repo_url,
                 "provider": request.provider,
                 "files_synced": files_created,
+                "commits_synced": commits_created,
+                "prs_synced": prs_created,
                 "branch": request.branch
             }
         )
@@ -764,6 +790,8 @@ async def sync_repository(
         return {
             "status": "success",
             "files_synced": files_created,
+            "commits_synced": commits_created,
+            "prs_synced": prs_created,
             "repo_name": repo_name,
             "repo_url": request.repo_url,
             "provider": request.provider,

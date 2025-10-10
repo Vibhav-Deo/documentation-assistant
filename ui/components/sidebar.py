@@ -320,7 +320,10 @@ def render_repository_sync():
 
                 result = response.json()
 
-                st.success(f"✅ Synced {result['files_synced']} files from {result['repo_name']} ({result['provider']})")
+                st.success(f"✅ Synced {result['repo_name']} ({result['provider']})")
+                st.write(f"- 📄 {result['files_synced']} code files")
+                st.write(f"- 💾 {result.get('commits_synced', 0)} commits")
+                st.write(f"- 🔀 {result.get('prs_synced', 0)} pull requests")
                 st.session_state.show_repo_files = True
 
             except requests.exceptions.RequestException as e:

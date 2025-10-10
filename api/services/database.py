@@ -139,6 +139,59 @@ class DatabaseService:
                 CREATE INDEX IF NOT EXISTS idx_code_files_type ON code_files(file_type);
                 CREATE INDEX IF NOT EXISTS idx_code_files_lang ON code_files(language);
                 CREATE INDEX IF NOT EXISTS idx_code_files_search ON code_files USING gin(to_tsvector('english', file_name || ' ' || COALESCE(content, '')));
+
+                -- Commits table
+                CREATE TABLE IF NOT EXISTS commits (
+                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                    repository_id UUID REFERENCES repositories(id) ON DELETE CASCADE,
+                    organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+                    sha VARCHAR(40) NOT NULL,
+                    message TEXT,
+                    author_name VARCHAR(255),
+                    author_email VARCHAR(255),
+                    commit_date TIMESTAMP,
+                    files_changed TEXT[],
+                    additions INTEGER DEFAULT 0,
+                    deletions INTEGER DEFAULT 0,
+                    ticket_references TEXT[],
+                    metadata JSONB,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(repository_id, sha)
+                );
+
+                -- Pull requests table
+                CREATE TABLE IF NOT EXISTS pull_requests (
+                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                    repository_id UUID REFERENCES repositories(id) ON DELETE CASCADE,
+                    organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+                    pr_number INTEGER NOT NULL,
+                    title TEXT,
+                    description TEXT,
+                    author_name VARCHAR(255),
+                    state VARCHAR(50),
+                    created_at_pr TIMESTAMP,
+                    merged_at TIMESTAMP,
+                    closed_at TIMESTAMP,
+                    commit_shas TEXT[],
+                    ticket_references TEXT[],
+                    metadata JSONB,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(repository_id, pr_number)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_commits_repo ON commits(repository_id);
+                CREATE INDEX IF NOT EXISTS idx_commits_org ON commits(organization_id);
+                CREATE INDEX IF NOT EXISTS idx_commits_sha ON commits(sha);
+                CREATE INDEX IF NOT EXISTS idx_commits_author ON commits(author_email);
+                CREATE INDEX IF NOT EXISTS idx_commits_date ON commits(commit_date);
+                CREATE INDEX IF NOT EXISTS idx_commits_tickets ON commits USING gin(ticket_references);
+                CREATE INDEX IF NOT EXISTS idx_commits_search ON commits USING gin(to_tsvector('english', message));
+
+                CREATE INDEX IF NOT EXISTS idx_prs_repo ON pull_requests(repository_id);
+                CREATE INDEX IF NOT EXISTS idx_prs_org ON pull_requests(organization_id);
+                CREATE INDEX IF NOT EXISTS idx_prs_number ON pull_requests(pr_number);
+                CREATE INDEX IF NOT EXISTS idx_prs_tickets ON pull_requests USING gin(ticket_references);
+                CREATE INDEX IF NOT EXISTS idx_prs_search ON pull_requests USING gin(to_tsvector('english', title || ' ' || COALESCE(description, '')));
             """)
     
     async def create_organization(self, name: str, plan: str = "free") -> Dict:
@@ -573,6 +626,160 @@ class DatabaseService:
                     LIMIT $4
                 """, org_id, query, f'%{query}%', limit)
 
+            return [dict(row) for row in rows]
+
+    async def create_commit(self, commit_data: Dict, repo_id: str, org_id: str) -> Dict:
+        """Create or update commit"""
+        async with self.pool.acquire() as conn:
+            # Extract ticket references from commit message
+            import re
+            ticket_pattern = r'\b([A-Z]{2,10}-\d+)\b'
+            ticket_refs = re.findall(ticket_pattern, commit_data.get('message', ''))
+
+            row = await conn.fetchrow("""
+                INSERT INTO commits (
+                    repository_id, organization_id, sha, message, author_name,
+                    author_email, commit_date, files_changed, additions, deletions,
+                    ticket_references, metadata
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                ON CONFLICT (repository_id, sha)
+                DO UPDATE SET
+                    message = EXCLUDED.message,
+                    author_name = EXCLUDED.author_name,
+                    author_email = EXCLUDED.author_email,
+                    commit_date = EXCLUDED.commit_date,
+                    files_changed = EXCLUDED.files_changed,
+                    ticket_references = EXCLUDED.ticket_references
+                RETURNING id, sha, author_name, commit_date
+            """,
+                repo_id,
+                org_id,
+                commit_data.get('sha'),
+                commit_data.get('message'),
+                commit_data.get('author_name'),
+                commit_data.get('author_email'),
+                commit_data.get('commit_date'),
+                commit_data.get('files_changed', []),
+                commit_data.get('additions', 0),
+                commit_data.get('deletions', 0),
+                ticket_refs,
+                json.dumps(commit_data.get('metadata', {}))
+            )
+            return dict(row)
+
+    async def create_pull_request(self, pr_data: Dict, repo_id: str, org_id: str) -> Dict:
+        """Create or update pull request"""
+        async with self.pool.acquire() as conn:
+            # Extract ticket references from PR title and description
+            import re
+            ticket_pattern = r'\b([A-Z]{2,10}-\d+)\b'
+            text = f"{pr_data.get('title', '')} {pr_data.get('description', '')}"
+            ticket_refs = re.findall(ticket_pattern, text)
+
+            row = await conn.fetchrow("""
+                INSERT INTO pull_requests (
+                    repository_id, organization_id, pr_number, title, description,
+                    author_name, state, created_at_pr, merged_at, closed_at,
+                    commit_shas, ticket_references, metadata
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                ON CONFLICT (repository_id, pr_number)
+                DO UPDATE SET
+                    title = EXCLUDED.title,
+                    description = EXCLUDED.description,
+                    state = EXCLUDED.state,
+                    merged_at = EXCLUDED.merged_at,
+                    closed_at = EXCLUDED.closed_at,
+                    ticket_references = EXCLUDED.ticket_references
+                RETURNING id, pr_number, title, state
+            """,
+                repo_id,
+                org_id,
+                pr_data.get('pr_number'),
+                pr_data.get('title'),
+                pr_data.get('description'),
+                pr_data.get('author_name'),
+                pr_data.get('state'),
+                pr_data.get('created_at'),
+                pr_data.get('merged_at'),
+                pr_data.get('closed_at'),
+                pr_data.get('commit_shas', []),
+                ticket_refs,
+                json.dumps(pr_data.get('metadata', {}))
+            )
+            return dict(row)
+
+    async def get_commits_for_repository(self, repo_id: str, org_id: str, limit: int = 100) -> List[Dict]:
+        """Get commits for a repository"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id, sha, message, author_name, author_email, commit_date,
+                       files_changed, ticket_references, additions, deletions
+                FROM commits
+                WHERE repository_id = $1 AND organization_id = $2
+                ORDER BY commit_date DESC NULLS LAST
+                LIMIT $3
+            """, repo_id, org_id, limit)
+            return [dict(row) for row in rows]
+
+    async def get_commits_for_ticket(self, ticket_key: str, org_id: str) -> List[Dict]:
+        """Get all commits that reference a Jira ticket"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT c.id, c.sha, c.message, c.author_name, c.author_email,
+                       c.commit_date, c.files_changed, r.repo_name, r.repo_url
+                FROM commits c
+                JOIN repositories r ON c.repository_id = r.id
+                WHERE c.organization_id = $1
+                AND $2 = ANY(c.ticket_references)
+                ORDER BY c.commit_date DESC
+            """, org_id, ticket_key)
+            return [dict(row) for row in rows]
+
+    async def get_pull_requests_for_repository(self, repo_id: str, org_id: str, limit: int = 50) -> List[Dict]:
+        """Get pull requests for a repository"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id, pr_number, title, description, author_name, state,
+                       created_at_pr, merged_at, closed_at, ticket_references
+                FROM pull_requests
+                WHERE repository_id = $1 AND organization_id = $2
+                ORDER BY created_at_pr DESC NULLS LAST
+                LIMIT $3
+            """, repo_id, org_id, limit)
+            return [dict(row) for row in rows]
+
+    async def get_pull_requests_for_ticket(self, ticket_key: str, org_id: str) -> List[Dict]:
+        """Get all PRs that reference a Jira ticket"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT pr.id, pr.pr_number, pr.title, pr.description, pr.author_name,
+                       pr.state, pr.merged_at, r.repo_name, r.repo_url
+                FROM pull_requests pr
+                JOIN repositories r ON pr.repository_id = r.id
+                WHERE pr.organization_id = $1
+                AND $2 = ANY(pr.ticket_references)
+                ORDER BY pr.created_at_pr DESC
+            """, org_id, ticket_key)
+            return [dict(row) for row in rows]
+
+    async def search_commits(self, query: str, org_id: str, limit: int = 10) -> List[Dict]:
+        """Search commits by message"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT c.id, c.sha, c.message, c.author_name, c.commit_date,
+                       c.ticket_references, r.repo_name
+                FROM commits c
+                JOIN repositories r ON c.repository_id = r.id
+                WHERE c.organization_id = $1
+                AND (
+                    to_tsvector('english', c.message) @@ plainto_tsquery('english', $2)
+                    OR c.message ILIKE $3
+                )
+                ORDER BY c.commit_date DESC
+                LIMIT $4
+            """, org_id, query, f'%{query}%', limit)
             return [dict(row) for row in rows]
 
 # Global database service

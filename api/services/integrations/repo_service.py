@@ -368,3 +368,262 @@ class RepositoryService:
             file_data_list.append(file_data)
 
         return file_data_list
+
+    def fetch_commit_history(self, max_commits: int = 1000) -> List[Dict]:
+        """Fetch commit history from repository"""
+        if self.provider == "github":
+            return self._github_get_commits(max_commits)
+        elif self.provider == "gitlab":
+            return self._gitlab_get_commits(max_commits)
+        elif self.provider == "bitbucket":
+            return self._bitbucket_get_commits(max_commits)
+
+    def _github_get_commits(self, max_commits: int) -> List[Dict]:
+        """Fetch commits from GitHub"""
+        url = f"{self.api_base}/repos/{self.owner}/{self.repo}/commits?sha={self.branch}&per_page=100"
+        headers = {
+            "Authorization": f"token {self.access_token}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+
+        commits = []
+        try:
+            while url and len(commits) < max_commits:
+                r = requests.get(url, headers=headers, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+
+                for commit_data in data:
+                    commit = commit_data.get('commit', {})
+                    author = commit.get('author', {})
+
+                    commits.append({
+                        'sha': commit_data['sha'],
+                        'message': commit.get('message', ''),
+                        'author_name': author.get('name', ''),
+                        'author_email': author.get('email', ''),
+                        'commit_date': author.get('date'),
+                        'files_changed': [f['filename'] for f in commit_data.get('files', [])],
+                        'additions': commit_data.get('stats', {}).get('additions', 0),
+                        'deletions': commit_data.get('stats', {}).get('deletions', 0),
+                        'metadata': {
+                            'url': commit_data.get('html_url'),
+                            'parents': [p['sha'] for p in commit_data.get('parents', [])]
+                        }
+                    })
+
+                # Check for next page
+                if 'next' in r.links:
+                    url = r.links['next']['url']
+                else:
+                    url = None
+
+            return commits[:max_commits]
+        except requests.RequestException as e:
+            print(f"Failed to fetch commits: {e}")
+            return []
+
+    def _gitlab_get_commits(self, max_commits: int) -> List[Dict]:
+        """Fetch commits from GitLab"""
+        project_id = f"{self.owner}%2F{self.repo}"
+        url = f"{self.api_base}/projects/{project_id}/repository/commits?ref_name={self.branch}&per_page=100"
+        headers = {"PRIVATE-TOKEN": self.access_token}
+
+        commits = []
+        try:
+            while url and len(commits) < max_commits:
+                r = requests.get(url, headers=headers, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+
+                for commit_data in data:
+                    commits.append({
+                        'sha': commit_data['id'],
+                        'message': commit_data.get('message', ''),
+                        'author_name': commit_data.get('author_name', ''),
+                        'author_email': commit_data.get('author_email', ''),
+                        'commit_date': commit_data.get('created_at'),
+                        'files_changed': [],  # GitLab doesn't include files in list
+                        'additions': 0,
+                        'deletions': 0,
+                        'metadata': {
+                            'url': commit_data.get('web_url')
+                        }
+                    })
+
+                # Check for next page
+                if 'next' in r.links:
+                    url = r.links['next']['url']
+                else:
+                    url = None
+
+            return commits[:max_commits]
+        except requests.RequestException as e:
+            print(f"Failed to fetch commits: {e}")
+            return []
+
+    def _bitbucket_get_commits(self, max_commits: int) -> List[Dict]:
+        """Fetch commits from Bitbucket"""
+        url = f"{self.api_base}/repositories/{self.owner}/{self.repo}/commits/{self.branch}?pagelen=100"
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+
+        commits = []
+        try:
+            while url and len(commits) < max_commits:
+                r = requests.get(url, headers=headers, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+
+                for commit_data in data.get('values', []):
+                    author = commit_data.get('author', {}).get('user', {})
+
+                    commits.append({
+                        'sha': commit_data['hash'],
+                        'message': commit_data.get('message', ''),
+                        'author_name': author.get('display_name', ''),
+                        'author_email': '',
+                        'commit_date': commit_data.get('date'),
+                        'files_changed': [],
+                        'additions': 0,
+                        'deletions': 0,
+                        'metadata': {
+                            'url': commit_data.get('links', {}).get('html', {}).get('href')
+                        }
+                    })
+
+                url = data.get('next')
+
+            return commits[:max_commits]
+        except requests.RequestException as e:
+            print(f"Failed to fetch commits: {e}")
+            return []
+
+    def fetch_pull_requests(self, max_prs: int = 100) -> List[Dict]:
+        """Fetch pull requests from repository"""
+        if self.provider == "github":
+            return self._github_get_prs(max_prs)
+        elif self.provider == "gitlab":
+            return self._gitlab_get_prs(max_prs)
+        elif self.provider == "bitbucket":
+            return self._bitbucket_get_prs(max_prs)
+
+    def _github_get_prs(self, max_prs: int) -> List[Dict]:
+        """Fetch PRs from GitHub"""
+        url = f"{self.api_base}/repos/{self.owner}/{self.repo}/pulls?state=all&per_page=100"
+        headers = {
+            "Authorization": f"token {self.access_token}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+
+        prs = []
+        try:
+            while url and len(prs) < max_prs:
+                r = requests.get(url, headers=headers, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+
+                for pr_data in data:
+                    prs.append({
+                        'pr_number': pr_data['number'],
+                        'title': pr_data['title'],
+                        'description': pr_data.get('body', ''),
+                        'author_name': pr_data.get('user', {}).get('login', ''),
+                        'state': pr_data['state'],
+                        'created_at': pr_data.get('created_at'),
+                        'merged_at': pr_data.get('merged_at'),
+                        'closed_at': pr_data.get('closed_at'),
+                        'commit_shas': [],  # Would need separate API call
+                        'metadata': {
+                            'url': pr_data.get('html_url'),
+                            'head': pr_data.get('head', {}).get('ref'),
+                            'base': pr_data.get('base', {}).get('ref')
+                        }
+                    })
+
+                # Check for next page
+                if 'next' in r.links:
+                    url = r.links['next']['url']
+                else:
+                    url = None
+
+            return prs[:max_prs]
+        except requests.RequestException as e:
+            print(f"Failed to fetch PRs: {e}")
+            return []
+
+    def _gitlab_get_prs(self, max_prs: int) -> List[Dict]:
+        """Fetch merge requests from GitLab"""
+        project_id = f"{self.owner}%2F{self.repo}"
+        url = f"{self.api_base}/projects/{project_id}/merge_requests?state=all&per_page=100"
+        headers = {"PRIVATE-TOKEN": self.access_token}
+
+        prs = []
+        try:
+            while url and len(prs) < max_prs:
+                r = requests.get(url, headers=headers, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+
+                for mr_data in data:
+                    prs.append({
+                        'pr_number': mr_data['iid'],
+                        'title': mr_data['title'],
+                        'description': mr_data.get('description', ''),
+                        'author_name': mr_data.get('author', {}).get('name', ''),
+                        'state': mr_data['state'],
+                        'created_at': mr_data.get('created_at'),
+                        'merged_at': mr_data.get('merged_at'),
+                        'closed_at': mr_data.get('closed_at'),
+                        'commit_shas': [],
+                        'metadata': {
+                            'url': mr_data.get('web_url'),
+                            'source_branch': mr_data.get('source_branch'),
+                            'target_branch': mr_data.get('target_branch')
+                        }
+                    })
+
+                # Check for next page
+                if 'next' in r.links:
+                    url = r.links['next']['url']
+                else:
+                    url = None
+
+            return prs[:max_prs]
+        except requests.RequestException as e:
+            print(f"Failed to fetch merge requests: {e}")
+            return []
+
+    def _bitbucket_get_prs(self, max_prs: int) -> List[Dict]:
+        """Fetch pull requests from Bitbucket"""
+        url = f"{self.api_base}/repositories/{self.owner}/{self.repo}/pullrequests?state=ALL&pagelen=50"
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+
+        prs = []
+        try:
+            while url and len(prs) < max_prs:
+                r = requests.get(url, headers=headers, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+
+                for pr_data in data.get('values', []):
+                    prs.append({
+                        'pr_number': pr_data['id'],
+                        'title': pr_data['title'],
+                        'description': pr_data.get('description', ''),
+                        'author_name': pr_data.get('author', {}).get('display_name', ''),
+                        'state': pr_data['state'],
+                        'created_at': pr_data.get('created_on'),
+                        'merged_at': pr_data.get('updated_on') if pr_data['state'] == 'MERGED' else None,
+                        'closed_at': pr_data.get('updated_on') if pr_data['state'] == 'DECLINED' else None,
+                        'commit_shas': [],
+                        'metadata': {
+                            'url': pr_data.get('links', {}).get('html', {}).get('href')
+                        }
+                    })
+
+                url = data.get('next')
+
+            return prs[:max_prs]
+        except requests.RequestException as e:
+            print(f"Failed to fetch pull requests: {e}")
+            return []
