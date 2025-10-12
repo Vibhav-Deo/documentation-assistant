@@ -106,6 +106,14 @@ class DocumentService:
     
     def fetch_confluence_pages(self, space_key: str, base_url: str, username: str, token: str) -> List[Tuple[str, str]]:
         """Fetch all pages from Confluence space"""
+        # Normalize base URL - remove trailing slashes and ensure correct format
+        base_url = base_url.rstrip('/')
+
+        # For Atlassian Cloud, the API endpoint is under /wiki
+        # Check if it's a cloud instance (*.atlassian.net)
+        if 'atlassian.net' in base_url and '/wiki' not in base_url:
+            base_url = f"{base_url}/wiki"
+
         url = f"{base_url}/rest/api/content"
         params = {"spaceKey": space_key, "expand": "body.storage", "limit": 100}
         auth = (username, token)

@@ -41,6 +41,8 @@ from services.redis_service import redis_service
 from services.oauth import oauth_service
 from services.monitoring import monitoring_service
 from services.relationship_service import RelationshipService
+from services.qdrant_setup import QdrantSetup, init_qdrant_setup
+from services.qdrant_indexer import QdrantIndexer, init_qdrant_indexer
 
 # Initialize services
 cache_service = SimpleCache()
@@ -50,16 +52,34 @@ search_service = SearchService(qdrant, embedder)
 document_service = DocumentService(qdrant, embedder)
 ai_service = AIService()
 
-# Relationship service will be initialized after database pool is ready
+# Relationship service, Qdrant setup, and indexer will be initialized after database pool is ready
 relationship_service = None
+qdrant_setup = None
+qdrant_indexer = None
 
 # Initialize database on startup
 @app.on_event("startup")
 async def startup_event():
-    global relationship_service
+    global relationship_service, qdrant_setup, qdrant_indexer
+
+    # Initialize database pool
     await db_service.init_pool()
+
     # Initialize relationship service after database pool is ready
     relationship_service = RelationshipService(db_service)
+
+    # Initialize Qdrant collections (Phase 1: Dual Storage)
+    qdrant_setup = init_qdrant_setup(qdrant)
+    collections_result = await qdrant_setup.create_all_collections()
+
+    # Initialize Qdrant indexer (Phase 2: Dual Storage)
+    qdrant_indexer = init_qdrant_indexer(qdrant, embedder)
+
+    # Log collection status
+    print("📊 Qdrant Collections Status:")
+    for collection, status in collections_result.items():
+        print(f"   {collection}: {status}")
+    print("✅ Qdrant indexer initialized")
 
 @app.get("/health")
 def health_check():
@@ -439,30 +459,60 @@ async def ask(query: Query, current_user: User = Depends(get_current_user)):
             print(f"Error searching docs: {e}")
             doc_results = []
         
-        # Search Jira tickets
+        # PHASE 5: MULTI-SOURCE SEMANTIC SEARCH (Qdrant)
+        # Search Jira tickets semantically (Phase 2)
         try:
-            jira_tickets = await db_service.search_jira_tickets(
-                query.question,
-                current_user.organization_id,
-                limit=3
-            )
-            print(f"Found {len(jira_tickets)} Jira tickets for query: {query.question}")
-            if jira_tickets:
-                print(f"  Tickets: {[t['ticket_key'] for t in jira_tickets]}")
+            if qdrant_indexer:
+                jira_tickets = await qdrant_indexer.search_jira_tickets(
+                    query.question,
+                    current_user.organization_id,
+                    limit=3
+                )
+                print(f"🔍 Found {len(jira_tickets)} Jira tickets (semantic) for: {query.question}")
+            else:
+                # Fallback to PostgreSQL exact search
+                jira_tickets = await db_service.search_jira_tickets(
+                    query.question,
+                    current_user.organization_id,
+                    limit=3
+                )
+                print(f"Found {len(jira_tickets)} Jira tickets (exact) for: {query.question}")
         except Exception as e:
             print(f"Error searching Jira tickets: {e}")
             jira_tickets = []
 
-        # Search code files
+        # Search commits semantically (Phase 3)
         try:
-            code_files = await db_service.search_code_files(
-                query.question,
-                current_user.organization_id,
-                limit=3
-            )
-            print(f"Found {len(code_files)} code files for query: {query.question}")
-            if code_files:
-                print(f"  Files: {[f['file_path'] for f in code_files]}")
+            if qdrant_indexer:
+                commit_results = await qdrant_indexer.search_commits(
+                    query.question,
+                    current_user.organization_id,
+                    limit=3
+                )
+                print(f"🔍 Found {len(commit_results)} commits (semantic) for: {query.question}")
+            else:
+                commit_results = []
+        except Exception as e:
+            print(f"Error searching commits: {e}")
+            commit_results = []
+
+        # Search code files semantically (Phase 4)
+        try:
+            if qdrant_indexer:
+                code_files = await qdrant_indexer.search_code_files(
+                    query.question,
+                    current_user.organization_id,
+                    limit=3
+                )
+                print(f"🔍 Found {len(code_files)} code files (semantic) for: {query.question}")
+            else:
+                # Fallback to PostgreSQL exact search
+                code_files = await db_service.search_code_files(
+                    query.question,
+                    current_user.organization_id,
+                    limit=3
+                )
+                print(f"Found {len(code_files)} code files (exact) for: {query.question}")
         except Exception as e:
             print(f"Error searching code files: {e}")
             code_files = []
@@ -585,18 +635,43 @@ async def ask(query: Query, current_user: User = Depends(get_current_user)):
             
             return response
 
-        # Build context and generate answer
-        context = "\n\n".join(context_parts)
-        prompt = ai_service.build_prompt(query.question, context, context_history)
+        # Build multi-source prompt and generate answer (PHASE 5)
+        # Format Confluence results for prompt builder
+        confluence_results = []
+        if doc_results:
+            for hit in doc_results:
+                confluence_results.append({
+                    "title": hit.payload.get("title", "Untitled"),
+                    "text": hit.payload.get("text", "")
+                })
+
+        # Use new multi-source prompt builder with source attribution
+        prompt = ai_service.build_multi_source_prompt(
+            query.question,
+            confluence_results,
+            jira_tickets,
+            commit_results,
+            code_files
+        )
         answer = ai_service.generate_response(prompt, query.model)
         
         # Store conversation
         session_id = query.session_id or conversation_service.create_session()
         conversation_service.add_message(session_id, query.question, answer, sources)
         
+        # Build enhanced response with source attribution (PHASE 5)
+        source_attribution = {
+            "confluence_docs": len(confluence_results),
+            "jira_tickets": len(jira_tickets),
+            "commits": len(commit_results),
+            "code_files": len(code_files),
+            "total_sources": len(confluence_results) + len(jira_tickets) + len(commit_results) + len(code_files)
+        }
+
         response = {
-            "answer": answer, 
+            "answer": answer,
             "sources": list(set(sources)),
+            "source_attribution": source_attribution,
             "session_id": session_id
         }
         
@@ -643,15 +718,26 @@ async def sync_jira(
         # Sync project tickets
         tickets = jira_service.sync_project(request.project_key)
 
-        # Store tickets in database
+        # DUAL STORAGE: Store tickets in both PostgreSQL and Qdrant
         tickets_created = 0
         tickets_updated = 0
+        tickets_indexed = 0
 
         for ticket_data in tickets:
             try:
+                # 1. Store in PostgreSQL (for relationships and exact queries)
                 result = await db_service.create_jira_ticket(ticket_data, current_user.organization_id)
-                # Check if it was an insert or update by checking if ticket existed
                 tickets_created += 1
+
+                # 2. Store in Qdrant (for semantic search) - PHASE 2
+                if qdrant_indexer:
+                    indexed = await qdrant_indexer.index_jira_ticket(
+                        ticket_data,
+                        current_user.organization_id
+                    )
+                    if indexed:
+                        tickets_indexed += 1
+
             except Exception as e:
                 print(f"Error storing ticket {ticket_data.get('key')}: {e}")
                 continue
@@ -665,6 +751,7 @@ async def sync_jira(
             {
                 "project": request.project_key,
                 "tickets_synced": len(tickets),
+                "tickets_indexed_qdrant": tickets_indexed,
                 "server": request.server
             }
         )
@@ -672,8 +759,10 @@ async def sync_jira(
         return {
             "status": "success",
             "tickets_synced": len(tickets),
+            "tickets_indexed": tickets_indexed,
             "project_key": request.project_key,
-            "server": request.server
+            "server": request.server,
+            "dual_storage": tickets_indexed > 0
         }
 
     except HTTPException:
@@ -744,24 +833,54 @@ async def sync_repository(
 
         repo_record = await db_service.create_repository(repo_data, current_user.organization_id)
 
-        # Store code files in database
+        # DUAL STORAGE: Store code files in PostgreSQL + Qdrant
         files_created = 0
+        files_indexed = 0
+
         for file_data in file_data_list:
             try:
+                # 1. Store in PostgreSQL (for relationships and exact queries)
                 await db_service.create_code_file(file_data, repo_record['id'], current_user.organization_id)
                 files_created += 1
+
+                # 2. Store in Qdrant (for semantic search) - PHASE 4
+                if qdrant_indexer:
+                    # Add repository_id to file data for indexing
+                    file_data['repository_id'] = repo_record['id']
+                    indexed = await qdrant_indexer.index_code_file(
+                        file_data,
+                        current_user.organization_id
+                    )
+                    if indexed:
+                        files_indexed += 1
+
             except Exception as e:
                 print(f"Error storing file {file_data.get('file_path')}: {e}")
                 continue
 
-        # Fetch and store commit history
+        # DUAL STORAGE: Fetch and store commit history in PostgreSQL + Qdrant
         print(f"Fetching commit history for {repo_name}...")
         commits = repo_service.fetch_commit_history(max_commits=500)
         commits_created = 0
+        commits_indexed = 0
+
         for commit_data in commits:
             try:
+                # 1. Store in PostgreSQL (for relationships and exact queries)
                 await db_service.create_commit(commit_data, repo_record['id'], current_user.organization_id)
                 commits_created += 1
+
+                # 2. Store in Qdrant (for semantic search) - PHASE 3
+                if qdrant_indexer:
+                    # Add repository_id to commit data for indexing
+                    commit_data['repository_id'] = repo_record['id']
+                    indexed = await qdrant_indexer.index_commit(
+                        commit_data,
+                        current_user.organization_id
+                    )
+                    if indexed:
+                        commits_indexed += 1
+
             except Exception as e:
                 print(f"Error storing commit {commit_data.get('sha')}: {e}")
                 continue
@@ -788,7 +907,9 @@ async def sync_repository(
                 "repo_url": request.repo_url,
                 "provider": request.provider,
                 "files_synced": files_created,
+                "files_indexed_qdrant": files_indexed,
                 "commits_synced": commits_created,
+                "commits_indexed_qdrant": commits_indexed,
                 "prs_synced": prs_created,
                 "branch": request.branch
             }
@@ -797,11 +918,14 @@ async def sync_repository(
         return {
             "status": "success",
             "files_synced": files_created,
+            "files_indexed": files_indexed,
             "commits_synced": commits_created,
+            "commits_indexed": commits_indexed,
             "prs_synced": prs_created,
             "repo_name": repo_name,
             "repo_url": request.repo_url,
             "provider": request.provider,
+            "dual_storage": (files_indexed > 0 and commits_indexed > 0),
             "branch": request.branch
         }
 
@@ -1015,4 +1139,174 @@ async def search_relationships(
         import traceback
         traceback.print_exc()
         print(f"ERROR in search_relationships: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# ADMIN ENDPOINTS: Qdrant Collections Management
+# ============================================================================
+
+@app.get("/admin/qdrant/collections")
+async def list_qdrant_collections(current_user: User = Depends(require_role(UserRole.ADMIN))):
+    """
+    List all Qdrant collections with their status and statistics.
+
+    Admin only endpoint to monitor multi-source indexing.
+    """
+    try:
+        if not qdrant_setup:
+            raise HTTPException(status_code=503, detail="Qdrant setup not initialized")
+
+        collections_info = await qdrant_setup.get_all_collections_info()
+        storage_stats = await qdrant_setup.get_storage_stats()
+
+        return {
+            "status": "success",
+            "collections": collections_info,
+            "storage": storage_stats
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/admin/qdrant/verify")
+async def verify_qdrant_setup(current_user: User = Depends(require_role(UserRole.ADMIN))):
+    """
+    Verify that all required Qdrant collections exist.
+
+    Returns:
+    - Status of each required collection
+    - Whether setup is complete
+    """
+    try:
+        if not qdrant_setup:
+            raise HTTPException(status_code=503, detail="Qdrant setup not initialized")
+
+        verification_results = await qdrant_setup.verify_setup()
+
+        all_exist = all(verification_results.values())
+
+        return {
+            "status": "complete" if all_exist else "incomplete",
+            "collections": verification_results,
+            "missing": [name for name, exists in verification_results.items() if not exists]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/search/jira")
+async def search_jira_tickets_semantic(
+    query: str,
+    limit: int = 10,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Search Jira tickets using semantic search (Phase 2: Dual Storage).
+
+    Enables natural language queries like:
+    - "authentication issues" → Finds tickets about login, auth, security
+    - "payment bugs" → Finds tickets about billing, transactions, checkout
+    - "performance problems" → Finds tickets about speed, latency, optimization
+
+    This is the core USP: semantic search across Jira to find related tickets
+    even when exact keywords don't match.
+    """
+    try:
+        if not qdrant_indexer:
+            raise HTTPException(status_code=503, detail="Qdrant indexer not initialized")
+
+        results = await qdrant_indexer.search_jira_tickets(
+            query,
+            current_user.organization_id,
+            limit
+        )
+
+        return {
+            "status": "success",
+            "query": query,
+            "results": results,
+            "count": len(results),
+            "source": "qdrant_semantic_search"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/search/commits")
+async def search_commits_semantic(
+    query: str,
+    limit: int = 10,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Search Git commits using semantic search (Phase 3: Dual Storage).
+
+    Enables natural language queries like:
+    - "user authentication" → Finds commits about login, auth, sign-in
+    - "payment processing" → Finds commits about billing, checkout, stripe
+    - "bug fixes" → Finds commits with bug-related changes
+    - "performance improvements" → Finds commits about optimization
+
+    Core USP: Find commits by what they did, not just exact commit message words.
+    """
+    try:
+        if not qdrant_indexer:
+            raise HTTPException(status_code=503, detail="Qdrant indexer not initialized")
+
+        results = await qdrant_indexer.search_commits(
+            query,
+            current_user.organization_id,
+            limit
+        )
+
+        return {
+            "status": "success",
+            "query": query,
+            "results": results,
+            "count": len(results),
+            "source": "qdrant_semantic_search"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/search/code")
+async def search_code_files_semantic(
+    query: str,
+    limit: int = 10,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Search code files using semantic search (Phase 4: Dual Storage).
+
+    Enables natural language queries like:
+    - "authentication service" → Finds auth-related files (auth.py, login.js, etc.)
+    - "payment processing" → Finds payment/billing files
+    - "database connection" → Finds DB-related files
+    - "user management" → Finds user/account management files
+
+    Core USP: Find code files by functionality, not just file names.
+    """
+    try:
+        if not qdrant_indexer:
+            raise HTTPException(status_code=503, detail="Qdrant indexer not initialized")
+
+        results = await qdrant_indexer.search_code_files(
+            query,
+            current_user.organization_id,
+            limit
+        )
+
+        return {
+            "status": "success",
+            "query": query,
+            "results": results,
+            "count": len(results),
+            "source": "qdrant_semantic_search"
+        }
+
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

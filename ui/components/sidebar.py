@@ -218,7 +218,13 @@ def render_jira_sync():
 
                 result = response.json()
 
-                st.success(f"✅ Synced {result['tickets_synced']} tickets from {result['project_key']}")
+                # Show dual storage metrics if available
+                if result.get('dual_storage'):
+                    st.success(f"✅ Synced {result['tickets_synced']} tickets from {result['project_key']}")
+                    st.info(f"🔍 Indexed {result.get('tickets_indexed', 0)} tickets for semantic search")
+                else:
+                    st.success(f"✅ Synced {result['tickets_synced']} tickets from {result['project_key']}")
+
                 st.session_state.show_jira_tickets = True
 
             except requests.exceptions.RequestException as e:
@@ -329,6 +335,13 @@ def render_repository_sync():
                 st.write(f"- 📄 {result['files_synced']} code files")
                 st.write(f"- 💾 {result.get('commits_synced', 0)} commits")
                 st.write(f"- 🔀 {result.get('prs_synced', 0)} pull requests")
+
+                # Show dual storage metrics if available
+                if result.get('dual_storage'):
+                    st.info(f"🔍 **Dual Storage Active:**")
+                    st.write(f"  - {result.get('files_indexed', 0)} files indexed for semantic search")
+                    st.write(f"  - {result.get('commits_indexed', 0)} commits indexed for semantic search")
+
                 st.session_state.show_repo_files = True
 
             except requests.exceptions.RequestException as e:

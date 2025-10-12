@@ -1,5 +1,6 @@
 import json
 import requests
+from typing import Dict, List, Optional
 from fastapi import HTTPException
 from config import OLLAMA_API_URL
 
@@ -92,3 +93,125 @@ class AIService:
         system_prompt = self.get_system_prompt(prompt_type)
         base_prompt = self.build_prompt(question, context, context_history)
         return f"{system_prompt}\n\n{base_prompt}"
+
+    def build_multi_source_context(
+        self,
+        confluence_results: List[Dict],
+        jira_results: List[Dict],
+        commit_results: List[Dict],
+        code_results: List[Dict]
+    ) -> str:
+        """
+        Build comprehensive context from all sources for AI query.
+
+        This is the CORE USP: combining Confluence docs, Jira tickets, Git commits,
+        and code files into one unified context for the AI.
+        """
+        context_parts = []
+
+        # Add Confluence documentation
+        if confluence_results:
+            context_parts.append("=== DOCUMENTATION (Confluence) ===")
+            for i, doc in enumerate(confluence_results[:3], 1):  # Top 3
+                title = doc.get('title', 'Untitled')
+                text = doc.get('text', '')[:500]  # Limit length
+                context_parts.append(f"\n[DOC-{i}] {title}")
+                context_parts.append(f"{text}...")
+
+        # Add Jira tickets
+        if jira_results:
+            context_parts.append("\n\n=== JIRA TICKETS ===")
+            for i, ticket in enumerate(jira_results[:3], 1):  # Top 3
+                key = ticket.get('ticket_key', 'N/A')
+                summary = ticket.get('summary', 'No summary')
+                status = ticket.get('status', 'Unknown')
+                description = ticket.get('description', '')[:300]
+                context_parts.append(f"\n[TICKET-{i}] {key}: {summary}")
+                context_parts.append(f"Status: {status}")
+                if description:
+                    context_parts.append(f"Description: {description}...")
+
+        # Add Git commits
+        if commit_results:
+            context_parts.append("\n\n=== GIT COMMITS ===")
+            for i, commit in enumerate(commit_results[:3], 1):  # Top 3
+                sha = commit.get('short_sha', commit.get('sha', 'N/A')[:7])
+                message = commit.get('message', 'No message')[:200]
+                author = commit.get('author_name', 'Unknown')
+                files = commit.get('files_changed', [])[:5]
+                context_parts.append(f"\n[COMMIT-{i}] {sha} by {author}")
+                context_parts.append(f"Message: {message}")
+                if files:
+                    context_parts.append(f"Files changed: {', '.join(files)}")
+
+        # Add Code files
+        if code_results:
+            context_parts.append("\n\n=== CODE FILES ===")
+            for i, file in enumerate(code_results[:3], 1):  # Top 3
+                path = file.get('file_path', 'Unknown')
+                language = file.get('language', 'N/A')
+                functions = file.get('functions', [])[:5]
+                classes = file.get('classes', [])[:5]
+                context_parts.append(f"\n[CODE-{i}] {path} ({language})")
+                if functions:
+                    context_parts.append(f"Functions: {', '.join(functions)}")
+                if classes:
+                    context_parts.append(f"Classes: {', '.join(classes)}")
+
+        return "\n".join(context_parts) if context_parts else ""
+
+    def build_multi_source_prompt(
+        self,
+        question: str,
+        confluence_results: List[Dict],
+        jira_results: List[Dict],
+        commit_results: List[Dict],
+        code_results: List[Dict]
+    ) -> str:
+        """
+        Build enhanced prompt for multi-source AI query.
+
+        CORE USP: User asks about a feature/bug/enhancement, AI searches ALL sources
+        and provides comprehensive answer showing Confluence docs, Jira tickets,
+        commits, and code files.
+        """
+        context = self.build_multi_source_context(
+            confluence_results,
+            jira_results,
+            commit_results,
+            code_results
+        )
+
+        # Count results from each source
+        sources_found = []
+        if confluence_results:
+            sources_found.append(f"{len(confluence_results)} documentation pages")
+        if jira_results:
+            sources_found.append(f"{len(jira_results)} Jira tickets")
+        if commit_results:
+            sources_found.append(f"{len(commit_results)} commits")
+        if code_results:
+            sources_found.append(f"{len(code_results)} code files")
+
+        sources_summary = ", ".join(sources_found) if sources_found else "no results"
+
+        prompt = f"""You are an intelligent development assistant with access to multiple information sources.
+
+I found {sources_summary} related to the query.
+
+Instructions:
+- Provide a comprehensive answer based on ALL the sources provided
+- Reference specific sources using their IDs (e.g., [DOC-1], [TICKET-2], [COMMIT-1], [CODE-3])
+- Explain HOW the information connects across sources
+- If a Jira ticket relates to commits or code, make that connection explicit
+- Structure your answer clearly with sections if needed
+- Be specific and actionable
+
+Context from multiple sources:
+{context}
+
+Question: {question}
+
+Answer (reference sources using their IDs):"""
+
+        return prompt
