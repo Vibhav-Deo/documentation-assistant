@@ -654,7 +654,16 @@ async def ask(query: Query, current_user: User = Depends(get_current_user)):
             code_files
         )
         answer = ai_service.generate_response(prompt, query.model)
-        
+
+        # Post-process answer to inject clickable links
+        answer = ai_service.inject_clickable_links(
+            answer,
+            confluence_results,
+            jira_tickets,
+            commit_results,
+            code_files
+        )
+
         # Store conversation
         session_id = query.session_id or conversation_service.create_session()
         conversation_service.add_message(session_id, query.question, answer, sources)
@@ -1193,6 +1202,153 @@ async def verify_qdrant_setup(current_user: User = Depends(require_role(UserRole
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/admin/backfill/qdrant")
+async def backfill_qdrant(current_user: User = Depends(require_role(UserRole.ADMIN))):
+    """
+    Phase 6: Backfill existing PostgreSQL data into Qdrant collections.
+
+    This endpoint indexes all existing Jira tickets, commits, and code files
+    from PostgreSQL into Qdrant for semantic search.
+
+    Use this when:
+    - After initial Qdrant setup to index existing data
+    - After data was synced before Qdrant indexing was enabled
+    - To rebuild Qdrant indexes from scratch
+    """
+    try:
+        if not qdrant_indexer:
+            raise HTTPException(status_code=503, detail="Qdrant indexer not initialized")
+
+        org_id = current_user.organization_id
+        results = {
+            "jira_tickets": {"total": 0, "indexed": 0, "failed": 0},
+            "commits": {"total": 0, "indexed": 0, "failed": 0},
+            "code_files": {"total": 0, "indexed": 0, "failed": 0}
+        }
+
+        # 1. Backfill Jira Tickets
+        print("📊 Backfilling Jira tickets...")
+        tickets = await db_service.get_jira_tickets(org_id, limit=10000)
+        results["jira_tickets"]["total"] = len(tickets)
+
+        for ticket in tickets:
+            try:
+                # Convert DB row to indexable format
+                ticket_data = {
+                    "ticket_key": ticket["ticket_key"],
+                    "summary": ticket["summary"],
+                    "description": ticket.get("description", ""),
+                    "status": ticket.get("status", ""),
+                    "assignee": ticket.get("assignee", ""),
+                    "reporter": ticket.get("reporter", ""),
+                    "issue_type": ticket.get("issue_type", ""),
+                    "priority": ticket.get("priority", ""),
+                    "labels": ticket.get("labels", []),
+                    "components": ticket.get("components", []),
+                    "created_date": ticket.get("created_date"),
+                    "updated_date": ticket.get("updated_date"),
+                    "resolved_date": ticket.get("resolved_date"),
+                    "url": ticket.get("metadata", {}).get("url", "") if ticket.get("metadata") else ""
+                }
+
+                indexed = await qdrant_indexer.index_jira_ticket(ticket_data, org_id)
+                if indexed:
+                    results["jira_tickets"]["indexed"] += 1
+                else:
+                    results["jira_tickets"]["failed"] += 1
+            except Exception as e:
+                print(f"❌ Failed to index ticket {ticket.get('ticket_key')}: {e}")
+                results["jira_tickets"]["failed"] += 1
+
+        # 2. Backfill Commits
+        print("📊 Backfilling commits...")
+        commits = await db_service.get_commits(org_id, limit=10000)
+        results["commits"]["total"] = len(commits)
+
+        for commit in commits:
+            try:
+                commit_data = {
+                    "sha": commit["sha"],
+                    "message": commit["message"],
+                    "author_name": commit.get("author_name", ""),
+                    "author_email": commit.get("author_email", ""),
+                    "commit_date": commit.get("commit_date"),
+                    "files_changed": commit.get("files_changed", []),
+                    "additions": commit.get("additions", 0),
+                    "deletions": commit.get("deletions", 0),
+                    "ticket_references": commit.get("ticket_references", []),
+                    "repository_id": str(commit.get("repository_id", "")),
+                    "metadata": commit.get("metadata", {})
+                }
+
+                indexed = await qdrant_indexer.index_commit(commit_data, org_id)
+                if indexed:
+                    results["commits"]["indexed"] += 1
+                else:
+                    results["commits"]["failed"] += 1
+            except Exception as e:
+                print(f"❌ Failed to index commit {commit.get('sha')[:7]}: {e}")
+                results["commits"]["failed"] += 1
+
+        # 3. Backfill Code Files
+        print("📊 Backfilling code files...")
+        code_files = await db_service.get_code_files(org_id, limit=10000)
+        results["code_files"]["total"] = len(code_files)
+
+        for file in code_files:
+            try:
+                file_data = {
+                    "file_path": file["file_path"],
+                    "language": file.get("language", ""),
+                    "size_bytes": file.get("size_bytes", 0),
+                    "functions": file.get("functions", []),
+                    "classes": file.get("classes", []),
+                    "repository_id": str(file.get("repository_id", "")),
+                    "url": file.get("metadata", {}).get("url", "") if file.get("metadata") else ""
+                }
+
+                indexed = await qdrant_indexer.index_code_file(file_data, org_id)
+                if indexed:
+                    results["code_files"]["indexed"] += 1
+                else:
+                    results["code_files"]["failed"] += 1
+            except Exception as e:
+                print(f"❌ Failed to index file {file.get('file_path')}: {e}")
+                results["code_files"]["failed"] += 1
+
+        # Log audit event
+        await db_service.log_audit(
+            current_user.id,
+            org_id,
+            "qdrant_backfill",
+            "backfill",
+            results
+        )
+
+        return {
+            "status": "success",
+            "message": "Backfill completed",
+            "results": results,
+            "summary": {
+                "total_indexed": (
+                    results["jira_tickets"]["indexed"] +
+                    results["commits"]["indexed"] +
+                    results["code_files"]["indexed"]
+                ),
+                "total_failed": (
+                    results["jira_tickets"]["failed"] +
+                    results["commits"]["failed"] +
+                    results["code_files"]["failed"]
+                )
+            }
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Backfill failed: {str(e)}")
 
 
 @app.get("/search/jira")

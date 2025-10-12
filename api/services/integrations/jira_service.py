@@ -97,6 +97,10 @@ class JiraService:
         
         code_refs = self._extract_code_references(description) if description else []
 
+        # Build Jira ticket URL
+        ticket_key = issue.get('key', '')
+        ticket_url = f"{self.server}/browse/{ticket_key}" if ticket_key else None
+
         return {
             "key": issue.get('key', ''),
             "summary": fields.get('summary', ''),
@@ -112,6 +116,7 @@ class JiraService:
             "story_points": fields.get('customfield_10016'),  # May vary
             "labels": fields.get('labels', []),
             "components": [c.get('name', '') for c in fields.get('components', [])],
+            "url": ticket_url,  # Add URL for clickable links
             "metadata": {
                 "comments": comments,
                 "changelog": changelog,

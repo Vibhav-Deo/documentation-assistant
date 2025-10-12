@@ -126,7 +126,14 @@ class AIService:
                 summary = ticket.get('summary', 'No summary')
                 status = ticket.get('status', 'Unknown')
                 description = ticket.get('description', '')[:300]
-                context_parts.append(f"\n[TICKET-{i}] {key}: {summary}")
+                url = ticket.get('url', '')
+
+                # Create clickable link if URL is available
+                if url:
+                    context_parts.append(f"\n[TICKET-{i}] [{key}: {summary}]({url})")
+                else:
+                    context_parts.append(f"\n[TICKET-{i}] {key}: {summary}")
+
                 context_parts.append(f"Status: {status}")
                 if description:
                     context_parts.append(f"Description: {description}...")
@@ -139,7 +146,14 @@ class AIService:
                 message = commit.get('message', 'No message')[:200]
                 author = commit.get('author_name', 'Unknown')
                 files = commit.get('files_changed', [])[:5]
-                context_parts.append(f"\n[COMMIT-{i}] {sha} by {author}")
+                url = commit.get('url', '')
+
+                # Create clickable link if URL is available
+                if url:
+                    context_parts.append(f"\n[COMMIT-{i}] [{sha}]({url}) by {author}")
+                else:
+                    context_parts.append(f"\n[COMMIT-{i}] {sha} by {author}")
+
                 context_parts.append(f"Message: {message}")
                 if files:
                     context_parts.append(f"Files changed: {', '.join(files)}")
@@ -152,7 +166,14 @@ class AIService:
                 language = file.get('language', 'N/A')
                 functions = file.get('functions', [])[:5]
                 classes = file.get('classes', [])[:5]
-                context_parts.append(f"\n[CODE-{i}] {path} ({language})")
+                url = file.get('url', '')
+
+                # Create clickable link if URL is available
+                if url:
+                    context_parts.append(f"\n[CODE-{i}] [{path}]({url}) ({language})")
+                else:
+                    context_parts.append(f"\n[CODE-{i}] {path} ({language})")
+
                 if functions:
                     context_parts.append(f"Functions: {', '.join(functions)}")
                 if classes:
@@ -201,7 +222,9 @@ I found {sources_summary} related to the query.
 
 Instructions:
 - Provide a comprehensive answer based on ALL the sources provided
-- Reference specific sources using their IDs (e.g., [DOC-1], [TICKET-2], [COMMIT-1], [CODE-3])
+- The context includes CLICKABLE MARKDOWN LINKS for tickets, commits, and code files
+- When referencing sources, use the EXACT markdown link format from the context (e.g., [TICKET-1], [COMMIT-2], [CODE-3])
+- If the source has a clickable link in the context like [[DEMO-001: Title](url)], preserve that link in your response
 - Explain HOW the information connects across sources
 - If a Jira ticket relates to commits or code, make that connection explicit
 - Structure your answer clearly with sections if needed
@@ -212,6 +235,72 @@ Context from multiple sources:
 
 Question: {question}
 
-Answer (reference sources using their IDs):"""
+Answer (reference sources using their IDs and preserve markdown links):"""
 
         return prompt
+
+    def inject_clickable_links(
+        self,
+        answer: str,
+        confluence_results: List[Dict],
+        jira_results: List[Dict],
+        commit_results: List[Dict],
+        code_results: List[Dict]
+    ) -> str:
+        """
+        Post-process AI answer to inject clickable markdown links for source references.
+
+        Replaces plain text like [TICKET-1] with clickable links like [[DEMO-001](url)].
+        This ensures clickable links work even if the AI doesn't preserve them.
+        """
+        import re
+
+        # Build lookup maps for URLs
+        # Confluence docs
+        doc_map = {}
+        for i, doc in enumerate(confluence_results[:3], 1):
+            title = doc.get('title', 'Untitled')[:50]
+            # Try to get URL from metadata or page_url field
+            url = doc.get('url', '') or doc.get('page_url', '') or doc.get('metadata', {}).get('url', '')
+            if url:
+                doc_map[f"[DOC-{i}]"] = f"[[DOC-{i}: {title}]({url})]"
+
+        # Jira tickets
+        jira_map = {}
+        for i, ticket in enumerate(jira_results[:3], 1):
+            key = ticket.get('ticket_key', 'N/A')
+            url = ticket.get('url', '')
+            summary = ticket.get('summary', '')[:50]
+            if url:
+                jira_map[f"[TICKET-{i}]"] = f"[[TICKET-{i}: {key}]({url})]"
+
+        commit_map = {}
+        for i, commit in enumerate(commit_results[:3], 1):
+            sha = commit.get('short_sha', commit.get('sha', 'N/A')[:7])
+            url = commit.get('url', '')
+            if url:
+                commit_map[f"[COMMIT-{i}]"] = f"[[COMMIT-{i}: {sha}]({url})]"
+
+        code_map = {}
+        for i, file in enumerate(code_results[:3], 1):
+            path = file.get('file_path', 'Unknown')
+            url = file.get('url', '')
+            if url:
+                # Extract filename for cleaner display
+                filename = path.split('/')[-1]
+                code_map[f"[CODE-{i}]"] = f"[[CODE-{i}: {filename}]({url})]"
+
+        # Replace references with clickable links
+        for ref, link in doc_map.items():
+            answer = answer.replace(ref, link)
+
+        for ref, link in jira_map.items():
+            answer = answer.replace(ref, link)
+
+        for ref, link in commit_map.items():
+            answer = answer.replace(ref, link)
+
+        for ref, link in code_map.items():
+            answer = answer.replace(ref, link)
+
+        return answer

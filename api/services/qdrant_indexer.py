@@ -68,7 +68,7 @@ class QdrantIndexer:
             # Generate embedding
             vector = self.embedder.encode(text).tolist()
 
-            # Create point with metadata
+            # Create point with metadata (including URL for clickable links)
             point = PointStruct(
                 id=str(uuid.uuid4()),
                 vector=vector,
@@ -87,7 +87,8 @@ class QdrantIndexer:
                     "components": ticket.get('components', []),
                     "created_date": str(ticket.get('created_date', '')),
                     "updated_date": str(ticket.get('updated_date', '')),
-                    "resolved_date": str(ticket.get('resolved_date', ''))
+                    "resolved_date": str(ticket.get('resolved_date', '')),
+                    "url": ticket.get('url', '')  # URL for clickable links in AI responses
                 }
             )
 
@@ -223,7 +224,8 @@ class QdrantIndexer:
                     "status": result.payload.get("status"),
                     "assignee": result.payload.get("assignee"),
                     "issue_type": result.payload.get("issue_type"),
-                    "priority": result.payload.get("priority")
+                    "priority": result.payload.get("priority"),
+                    "url": result.payload.get("url", "")  # Include URL for clickable links
                 })
 
             logger.info(f"🔍 Found {len(formatted_results)} tickets for query: '{query}'")
@@ -264,7 +266,10 @@ class QdrantIndexer:
             # Generate embedding
             vector = self.embedder.encode(text).tolist()
 
-            # Create point with metadata
+            # Create point with metadata (including URL for clickable links)
+            # Extract URL from metadata or construct from repo URL
+            commit_url = commit.get('metadata', {}).get('url', '') if commit.get('metadata') else ''
+
             point = PointStruct(
                 id=str(uuid.uuid4()),
                 vector=vector,
@@ -281,7 +286,8 @@ class QdrantIndexer:
                     "additions": commit.get('additions', 0),
                     "deletions": commit.get('deletions', 0),
                     "ticket_references": commit.get('ticket_references', []),
-                    "repository_id": str(commit.get('repository_id', ''))
+                    "repository_id": str(commit.get('repository_id', '')),
+                    "url": commit_url  # URL for clickable links in AI responses
                 }
             )
 
@@ -418,7 +424,8 @@ class QdrantIndexer:
                     "author_email": result.payload.get("author_email"),
                     "commit_date": result.payload.get("commit_date"),
                     "files_changed": result.payload.get("files_changed", []),
-                    "ticket_references": result.payload.get("ticket_references", [])
+                    "ticket_references": result.payload.get("ticket_references", []),
+                    "url": result.payload.get("url", "")  # Include URL for clickable links
                 })
 
             logger.info(f"🔍 Found {len(formatted_results)} commits for query: '{query}'")
@@ -467,7 +474,12 @@ class QdrantIndexer:
             # Generate embedding
             vector = self.embedder.encode(text).tolist()
 
-            # Create point with metadata
+            # Create point with metadata (including URL for clickable links)
+            # URL should be passed from the repo sync, constructed as:
+            # GitHub: https://github.com/owner/repo/blob/branch/path
+            # GitLab: https://gitlab.com/owner/repo/-/blob/branch/path
+            code_url = file.get('url', '') or file.get('metadata', {}).get('url', '')
+
             point = PointStruct(
                 id=str(uuid.uuid4()),
                 vector=vector,
@@ -479,7 +491,8 @@ class QdrantIndexer:
                     "size_bytes": file.get('size_bytes', 0),
                     "functions": [f.get('name', '') for f in file.get('functions', [])][:50],  # Limit array
                     "classes": [c.get('name', '') for c in file.get('classes', [])][:50],  # Limit array
-                    "repository_id": str(file.get('repository_id', ''))
+                    "repository_id": str(file.get('repository_id', '')),
+                    "url": code_url  # URL for clickable links in AI responses
                 }
             )
 
@@ -619,7 +632,8 @@ class QdrantIndexer:
                     "size_bytes": result.payload.get("size_bytes"),
                     "functions": result.payload.get("functions", []),
                     "classes": result.payload.get("classes", []),
-                    "repository_id": result.payload.get("repository_id")
+                    "repository_id": result.payload.get("repository_id"),
+                    "url": result.payload.get("url", "")  # Include URL for clickable links
                 })
 
             logger.info(f"🔍 Found {len(formatted_results)} code files for query: '{query}'")
