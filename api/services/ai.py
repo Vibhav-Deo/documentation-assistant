@@ -142,7 +142,7 @@ class AIService:
         if commit_results:
             context_parts.append("\n\n=== GIT COMMITS ===")
             for i, commit in enumerate(commit_results[:3], 1):  # Top 3
-                sha = commit.get('short_sha', commit.get('sha', 'N/A')[:7])
+                sha = commit.get('short_sha') or (commit.get('sha') or 'N/A')[:7]
                 message = commit.get('message', 'No message')[:200]
                 author = commit.get('author_name', 'Unknown')
                 files = commit.get('files_changed', [])[:5]
@@ -276,7 +276,7 @@ Answer (reference sources using their IDs and preserve markdown links):"""
 
         commit_map = {}
         for i, commit in enumerate(commit_results[:3], 1):
-            sha = commit.get('short_sha', commit.get('sha', 'N/A')[:7])
+            sha = commit.get('short_sha') or (commit.get('sha') or 'N/A')[:7]
             url = commit.get('url', '')
             if url:
                 commit_map[f"[COMMIT-{i}]"] = f"[[COMMIT-{i}: {sha}]({url})]"

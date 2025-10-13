@@ -60,7 +60,7 @@ qdrant_indexer = None
 # Initialize database on startup
 @app.on_event("startup")
 async def startup_event():
-    global relationship_service, qdrant_setup, qdrant_indexer, intent_analyzer
+    global relationship_service, qdrant_setup, qdrant_indexer, intent_analyzer, gap_detector, impact_analyzer
 
     # Initialize database pool
     await db_service.init_pool()
@@ -85,6 +85,16 @@ async def startup_event():
     from services.intent_analyzer import IntentAnalyzer
     intent_analyzer = IntentAnalyzer(db_service, ai_service)
     print("✅ IntentAnalyzer initialized")
+
+    # Initialize GapDetector (Phase 8b: Find Missing Work)
+    from services.gap_detector import GapDetector
+    gap_detector = GapDetector(db_service)
+    print("✅ GapDetector initialized")
+
+    # Initialize ImpactAnalyzer (Phase 8c: Predict Change Impact)
+    from services.impact_analyzer import ImpactAnalyzer
+    impact_analyzer = ImpactAnalyzer(db_service)
+    print("✅ ImpactAnalyzer initialized")
 
 @app.get("/health")
 def health_check():
@@ -1626,6 +1636,319 @@ async def list_decisions(
             "status": "success",
             "decisions": decisions,
             "count": len(decisions)
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# GAP DETECTOR: Find Missing Work & Documentation (Phase 8b)
+# ============================================================================
+
+# Initialize GapDetector (will be done at startup)
+gap_detector = None
+
+
+@app.get("/gaps/orphaned-tickets")
+async def get_orphaned_tickets(
+    days: int = 90,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Find Jira tickets with no associated commits or PRs.
+
+    These are potentially forgotten or improperly linked tickets.
+
+    Query params:
+    - days: Look at tickets from last N days (default 90)
+
+    Example: GET /gaps/orphaned-tickets?days=30
+    """
+    try:
+        if not gap_detector:
+            raise HTTPException(status_code=503, detail="GapDetector not initialized")
+
+        org_id = current_user.organization_id
+        result = await gap_detector.find_orphaned_tickets(org_id, days)
+
+        return {
+            "status": "success",
+            **result
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/gaps/undocumented")
+async def get_undocumented_features(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Find commits with no ticket references.
+
+    These are potentially undocumented features or changes.
+
+    Example: GET /gaps/undocumented
+    """
+    try:
+        if not gap_detector:
+            raise HTTPException(status_code=503, detail="GapDetector not initialized")
+
+        org_id = current_user.organization_id
+        result = await gap_detector.find_undocumented_features(org_id)
+
+        return {
+            "status": "success",
+            **result
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/gaps/missing-decisions")
+async def get_missing_decisions(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Find tickets that should have decision analysis but don't.
+
+    Example: GET /gaps/missing-decisions
+    """
+    try:
+        if not gap_detector:
+            raise HTTPException(status_code=503, detail="GapDetector not initialized")
+
+        org_id = current_user.organization_id
+        result = await gap_detector.find_missing_decisions(org_id)
+
+        return {
+            "status": "success",
+            **result
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/gaps/stale-work")
+async def get_stale_work(
+    days: int = 30,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Find work items not updated in N days.
+
+    Query params:
+    - days: Consider stale if no updates in N days (default 30)
+
+    Example: GET /gaps/stale-work?days=60
+    """
+    try:
+        if not gap_detector:
+            raise HTTPException(status_code=503, detail="GapDetector not initialized")
+
+        org_id = current_user.organization_id
+        result = await gap_detector.find_stale_work(org_id, days)
+
+        return {
+            "status": "success",
+            **result
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/gaps/comprehensive")
+async def get_comprehensive_gaps(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get all gaps at once for dashboard view.
+
+    Returns:
+    - Orphaned tickets
+    - Undocumented features
+    - Missing decisions
+    - Stale work
+    - Summary statistics
+
+    Example: GET /gaps/comprehensive
+    """
+    try:
+        if not gap_detector:
+            raise HTTPException(status_code=503, detail="GapDetector not initialized")
+
+        org_id = current_user.organization_id
+        result = await gap_detector.get_comprehensive_gaps(org_id)
+
+        return {
+            "status": "success",
+            **result
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# IMPACT ANALYZER: Predict Change Impact (Phase 8c)
+# ============================================================================
+
+# Initialize ImpactAnalyzer (will be done at startup)
+impact_analyzer = None
+
+
+@app.post("/impact/file")
+async def analyze_file_impact(
+    request: dict,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Analyze the impact of changing a specific file.
+
+    Request body:
+    {
+        "file_path": "src/auth/oauth.ts"
+    }
+
+    Returns:
+    - Related tickets
+    - Commit history
+    - Developers who worked on it
+    - Files often changed together
+    - Suggested reviewers
+
+    Example: POST /impact/file
+    """
+    try:
+        if not impact_analyzer:
+            raise HTTPException(status_code=503, detail="ImpactAnalyzer not initialized")
+
+        file_path = request.get("file_path")
+        if not file_path:
+            raise HTTPException(status_code=400, detail="file_path is required")
+
+        org_id = current_user.organization_id
+        result = await impact_analyzer.analyze_file_impact(file_path, org_id)
+
+        return {
+            "status": "success",
+            **result
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/impact/ticket/{ticket_key}")
+async def analyze_ticket_impact(
+    ticket_key: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Analyze the impact of implementing/changing a ticket.
+
+    Returns:
+    - Affected files
+    - Similar tickets
+    - Dependent tickets
+    - Estimated scope
+    - Blast radius
+
+    Example: GET /impact/ticket/AUTH-101
+    """
+    try:
+        if not impact_analyzer:
+            raise HTTPException(status_code=503, detail="ImpactAnalyzer not initialized")
+
+        org_id = current_user.organization_id
+        result = await impact_analyzer.analyze_ticket_impact(ticket_key, org_id)
+
+        return {
+            "status": "success",
+            **result
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/impact/commit/{sha}")
+async def analyze_commit_impact(
+    sha: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Analyze the impact of a specific commit.
+
+    Returns:
+    - Files changed
+    - Related tickets
+    - Risk assessment
+    - File categorization
+
+    Example: GET /impact/commit/abc123def456
+    """
+    try:
+        if not impact_analyzer:
+            raise HTTPException(status_code=503, detail="ImpactAnalyzer not initialized")
+
+        org_id = current_user.organization_id
+        result = await impact_analyzer.analyze_commit_impact(sha, org_id)
+
+        return {
+            "status": "success",
+            **result
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/impact/suggest-reviewers")
+async def suggest_reviewers(
+    request: dict,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Suggest code reviewers based on file history.
+
+    Request body:
+    {
+        "files": ["src/auth/oauth.ts", "src/auth/tokens.ts"]
+    }
+
+    Returns:
+    - Suggested reviewers with commit counts
+    - Files each reviewer worked on
+    - Rationale
+
+    Example: POST /impact/suggest-reviewers
+    """
+    try:
+        if not impact_analyzer:
+            raise HTTPException(status_code=503, detail="ImpactAnalyzer not initialized")
+
+        files = request.get("files", [])
+        if not files:
+            raise HTTPException(status_code=400, detail="files array is required")
+
+        org_id = current_user.organization_id
+        result = await impact_analyzer.suggest_reviewers(files, org_id)
+
+        return {
+            "status": "success",
+            **result
         }
 
     except Exception as e:
