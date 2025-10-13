@@ -46,6 +46,11 @@ def render_sidebar():
             st.session_state.show_relationships = True
             st.rerun()
 
+        # Decision Analysis (Phase 8a: IntentAnalyzer)
+        if st.button("🧠 Decision Analysis", use_container_width=True, key="decisions_btn"):
+            st.session_state.show_decisions = True
+            st.rerun()
+
         # Admin panel link
         if "user_info" in st.session_state and st.session_state.user_info["user"]["role"] == "admin":
             if st.button("🛠️ Admin Panel", use_container_width=True, key="admin_panel_btn"):

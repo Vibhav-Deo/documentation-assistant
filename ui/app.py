@@ -4,6 +4,7 @@ from components.chat import render_chat_interface
 from components.auth import render_login_page, check_authentication
 from components.admin import render_admin_panel
 from components.relationships import render_relationships_page
+from components.decisions import render_decisions_page
 
 # Page configuration
 st.set_page_config(
@@ -44,6 +45,14 @@ def main():
             st.session_state.show_relationships = False
             st.rerun()
         render_relationships_page()
+        return
+
+    # Check if decisions page should be shown (Phase 8a: IntentAnalyzer)
+    if st.session_state.get("show_decisions", False):
+        if st.button("← Back to Chat"):
+            st.session_state.show_decisions = False
+            st.rerun()
+        render_decisions_page()
         return
 
     # Render sidebar and get AI settings

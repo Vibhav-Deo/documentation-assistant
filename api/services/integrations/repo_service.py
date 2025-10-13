@@ -330,18 +330,17 @@ class RepositoryService:
         }
         return lang_map.get(ext.lower(), 'unknown')
 
-    def sync_repository(self, max_files: int = 500) -> List[Dict]:
-        """Sync repository and return file data"""
+    def sync_repository(self, max_files: Optional[int] = None) -> List[Dict]:
+        """Sync repository and return file data (NO LIMITS - syncs all files)"""
         files = self.get_file_tree()
 
-        # Limit number of files to prevent overload
-        if len(files) > max_files:
-            print(f"Warning: Repository has {len(files)} files, limiting to {max_files}")
-            files = files[:max_files]
+        # NO LIMITS - sync all files in repository
+        total_files = len(files)
+        print(f"📊 Repository has {total_files} code files to sync")
 
         file_data_list = []
 
-        for file_info in files:
+        for idx, file_info in enumerate(files, 1):
             file_path = file_info['path']
             content, metadata = self.get_file_content(file_path)
 
@@ -356,7 +355,7 @@ class RepositoryService:
                 'file_name': file_path.split('/')[-1],
                 'file_type': parsed_data['file_type'],
                 'language': parsed_data['language'],
-                'content': content[:50000],  # Limit content size (50KB)
+                'content': content[:100000],  # Increased limit: 100KB per file
                 'functions': parsed_data['functions'],
                 'classes': parsed_data['classes'],
                 'imports': [imp.strip() for imp in parsed_data['imports']],
@@ -367,10 +366,15 @@ class RepositoryService:
 
             file_data_list.append(file_data)
 
+            # Progress logging every 100 files
+            if idx % 100 == 0:
+                print(f"Synced {idx}/{total_files} files...")
+
+        print(f"✅ Completed: Synced {len(file_data_list)} files from repository")
         return file_data_list
 
-    def fetch_commit_history(self, max_commits: int = 1000) -> List[Dict]:
-        """Fetch commit history from repository"""
+    def fetch_commit_history(self, max_commits: Optional[int] = None) -> List[Dict]:
+        """Fetch ALL commit history from repository (NO LIMITS)"""
         if self.provider == "github":
             return self._github_get_commits(max_commits)
         elif self.provider == "gitlab":
@@ -378,8 +382,8 @@ class RepositoryService:
         elif self.provider == "bitbucket":
             return self._bitbucket_get_commits(max_commits)
 
-    def _github_get_commits(self, max_commits: int) -> List[Dict]:
-        """Fetch commits from GitHub"""
+    def _github_get_commits(self, max_commits: Optional[int]) -> List[Dict]:
+        """Fetch ALL commits from GitHub (NO LIMITS unless specified)"""
         url = f"{self.api_base}/repos/{self.owner}/{self.repo}/commits?sha={self.branch}&per_page=100"
         headers = {
             "Authorization": f"token {self.access_token}",
@@ -388,7 +392,12 @@ class RepositoryService:
 
         commits = []
         try:
-            while url and len(commits) < max_commits:
+            # Fetch all pages until no more commits or max_commits reached
+            while url:
+                # Check if we've reached the limit (only if max_commits is set)
+                if max_commits and len(commits) >= max_commits:
+                    break
+
                 r = requests.get(url, headers=headers, timeout=30)
                 r.raise_for_status()
                 data = r.json()
@@ -412,26 +421,34 @@ class RepositoryService:
                         }
                     })
 
+                # Progress logging
+                if len(commits) % 500 == 0:
+                    print(f"Fetched {len(commits)} commits...")
+
                 # Check for next page
                 if 'next' in r.links:
                     url = r.links['next']['url']
                 else:
                     url = None
 
-            return commits[:max_commits]
+            print(f"✅ Fetched {len(commits)} commits from GitHub")
+            return commits[:max_commits] if max_commits else commits
         except requests.RequestException as e:
             print(f"Failed to fetch commits: {e}")
             return []
 
-    def _gitlab_get_commits(self, max_commits: int) -> List[Dict]:
-        """Fetch commits from GitLab"""
+    def _gitlab_get_commits(self, max_commits: Optional[int]) -> List[Dict]:
+        """Fetch ALL commits from GitLab (NO LIMITS unless specified)"""
         project_id = f"{self.owner}%2F{self.repo}"
         url = f"{self.api_base}/projects/{project_id}/repository/commits?ref_name={self.branch}&per_page=100"
         headers = {"PRIVATE-TOKEN": self.access_token}
 
         commits = []
         try:
-            while url and len(commits) < max_commits:
+            while url:
+                if max_commits and len(commits) >= max_commits:
+                    break
+
                 r = requests.get(url, headers=headers, timeout=30)
                 r.raise_for_status()
                 data = r.json()
@@ -451,25 +468,32 @@ class RepositoryService:
                         }
                     })
 
+                if len(commits) % 500 == 0:
+                    print(f"Fetched {len(commits)} commits...")
+
                 # Check for next page
                 if 'next' in r.links:
                     url = r.links['next']['url']
                 else:
                     url = None
 
-            return commits[:max_commits]
+            print(f"✅ Fetched {len(commits)} commits from GitLab")
+            return commits[:max_commits] if max_commits else commits
         except requests.RequestException as e:
             print(f"Failed to fetch commits: {e}")
             return []
 
-    def _bitbucket_get_commits(self, max_commits: int) -> List[Dict]:
-        """Fetch commits from Bitbucket"""
+    def _bitbucket_get_commits(self, max_commits: Optional[int]) -> List[Dict]:
+        """Fetch ALL commits from Bitbucket (NO LIMITS unless specified)"""
         url = f"{self.api_base}/repositories/{self.owner}/{self.repo}/commits/{self.branch}?pagelen=100"
         headers = {"Authorization": f"Bearer {self.access_token}"}
 
         commits = []
         try:
-            while url and len(commits) < max_commits:
+            while url:
+                if max_commits and len(commits) >= max_commits:
+                    break
+
                 r = requests.get(url, headers=headers, timeout=30)
                 r.raise_for_status()
                 data = r.json()
@@ -491,15 +515,19 @@ class RepositoryService:
                         }
                     })
 
+                if len(commits) % 500 == 0:
+                    print(f"Fetched {len(commits)} commits...")
+
                 url = data.get('next')
 
-            return commits[:max_commits]
+            print(f"✅ Fetched {len(commits)} commits from Bitbucket")
+            return commits[:max_commits] if max_commits else commits
         except requests.RequestException as e:
             print(f"Failed to fetch commits: {e}")
             return []
 
-    def fetch_pull_requests(self, max_prs: int = 100) -> List[Dict]:
-        """Fetch pull requests from repository"""
+    def fetch_pull_requests(self, max_prs: Optional[int] = None) -> List[Dict]:
+        """Fetch ALL pull requests from repository (NO LIMITS)"""
         if self.provider == "github":
             return self._github_get_prs(max_prs)
         elif self.provider == "gitlab":
@@ -507,8 +535,8 @@ class RepositoryService:
         elif self.provider == "bitbucket":
             return self._bitbucket_get_prs(max_prs)
 
-    def _github_get_prs(self, max_prs: int) -> List[Dict]:
-        """Fetch PRs from GitHub"""
+    def _github_get_prs(self, max_prs: Optional[int]) -> List[Dict]:
+        """Fetch ALL PRs from GitHub (NO LIMITS unless specified)"""
         url = f"{self.api_base}/repos/{self.owner}/{self.repo}/pulls?state=all&per_page=100"
         headers = {
             "Authorization": f"token {self.access_token}",
@@ -517,7 +545,10 @@ class RepositoryService:
 
         prs = []
         try:
-            while url and len(prs) < max_prs:
+            while url:
+                if max_prs and len(prs) >= max_prs:
+                    break
+
                 r = requests.get(url, headers=headers, timeout=30)
                 r.raise_for_status()
                 data = r.json()
@@ -540,26 +571,33 @@ class RepositoryService:
                         }
                     })
 
+                if len(prs) % 100 == 0:
+                    print(f"Fetched {len(prs)} PRs...")
+
                 # Check for next page
                 if 'next' in r.links:
                     url = r.links['next']['url']
                 else:
                     url = None
 
-            return prs[:max_prs]
+            print(f"✅ Fetched {len(prs)} PRs from GitHub")
+            return prs[:max_prs] if max_prs else prs
         except requests.RequestException as e:
             print(f"Failed to fetch PRs: {e}")
             return []
 
-    def _gitlab_get_prs(self, max_prs: int) -> List[Dict]:
-        """Fetch merge requests from GitLab"""
+    def _gitlab_get_prs(self, max_prs: Optional[int]) -> List[Dict]:
+        """Fetch ALL merge requests from GitLab (NO LIMITS unless specified)"""
         project_id = f"{self.owner}%2F{self.repo}"
         url = f"{self.api_base}/projects/{project_id}/merge_requests?state=all&per_page=100"
         headers = {"PRIVATE-TOKEN": self.access_token}
 
         prs = []
         try:
-            while url and len(prs) < max_prs:
+            while url:
+                if max_prs and len(prs) >= max_prs:
+                    break
+
                 r = requests.get(url, headers=headers, timeout=30)
                 r.raise_for_status()
                 data = r.json()
@@ -582,25 +620,32 @@ class RepositoryService:
                         }
                     })
 
+                if len(prs) % 100 == 0:
+                    print(f"Fetched {len(prs)} MRs...")
+
                 # Check for next page
                 if 'next' in r.links:
                     url = r.links['next']['url']
                 else:
                     url = None
 
-            return prs[:max_prs]
+            print(f"✅ Fetched {len(prs)} merge requests from GitLab")
+            return prs[:max_prs] if max_prs else prs
         except requests.RequestException as e:
             print(f"Failed to fetch merge requests: {e}")
             return []
 
-    def _bitbucket_get_prs(self, max_prs: int) -> List[Dict]:
-        """Fetch pull requests from Bitbucket"""
+    def _bitbucket_get_prs(self, max_prs: Optional[int]) -> List[Dict]:
+        """Fetch ALL pull requests from Bitbucket (NO LIMITS unless specified)"""
         url = f"{self.api_base}/repositories/{self.owner}/{self.repo}/pullrequests?state=ALL&pagelen=50"
         headers = {"Authorization": f"Bearer {self.access_token}"}
 
         prs = []
         try:
-            while url and len(prs) < max_prs:
+            while url:
+                if max_prs and len(prs) >= max_prs:
+                    break
+
                 r = requests.get(url, headers=headers, timeout=30)
                 r.raise_for_status()
                 data = r.json()
@@ -621,9 +666,13 @@ class RepositoryService:
                         }
                     })
 
+                if len(prs) % 100 == 0:
+                    print(f"Fetched {len(prs)} PRs...")
+
                 url = data.get('next')
 
-            return prs[:max_prs]
+            print(f"✅ Fetched {len(prs)} pull requests from Bitbucket")
+            return prs[:max_prs] if max_prs else prs
         except requests.RequestException as e:
             print(f"Failed to fetch pull requests: {e}")
             return []

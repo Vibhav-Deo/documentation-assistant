@@ -826,5 +826,143 @@ class DatabaseService:
             """, org_id, query, f'%{query}%', limit)
             return [dict(row) for row in rows]
 
+    # ========================================================================
+    # INTENT ANALYZER: Decision Storage Methods
+    # ========================================================================
+
+    async def get_jira_ticket_by_key(self, ticket_key: str, org_id: str) -> Optional[Dict]:
+        """Get a single Jira ticket by its key."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT * FROM jira_tickets
+                WHERE organization_id = $1 AND ticket_key = $2
+            """, org_id, ticket_key)
+            return dict(row) if row else None
+
+    async def get_commits_for_ticket(self, ticket_key: str, org_id: str) -> List[Dict]:
+        """Get all commits that reference a specific ticket."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT * FROM commits
+                WHERE organization_id = $1
+                AND $2 = ANY(ticket_references)
+                ORDER BY commit_date DESC
+            """, org_id, ticket_key)
+            return [dict(row) for row in rows]
+
+    async def get_prs_for_ticket(self, ticket_key: str, org_id: str) -> List[Dict]:
+        """Get all PRs that reference a specific ticket."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT * FROM pull_requests
+                WHERE organization_id = $1
+                AND (
+                    title ILIKE $2
+                    OR description ILIKE $2
+                )
+                ORDER BY created_at DESC
+            """, org_id, f'%{ticket_key}%')
+            return [dict(row) for row in rows]
+
+    async def create_decision(self, decision_data: Dict, org_id: str) -> Dict:
+        """Store a decision analysis in the database."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                INSERT INTO decisions (
+                    organization_id, decision_id, ticket_key, decision_summary,
+                    problem_statement, alternatives_considered, chosen_approach,
+                    rationale, constraints, risks, tradeoffs, stakeholders,
+                    implementation_commits, related_prs, related_docs,
+                    raw_analysis, confidence_score
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+                )
+                ON CONFLICT (organization_id, decision_id)
+                DO UPDATE SET
+                    decision_summary = EXCLUDED.decision_summary,
+                    problem_statement = EXCLUDED.problem_statement,
+                    alternatives_considered = EXCLUDED.alternatives_considered,
+                    chosen_approach = EXCLUDED.chosen_approach,
+                    rationale = EXCLUDED.rationale,
+                    constraints = EXCLUDED.constraints,
+                    risks = EXCLUDED.risks,
+                    tradeoffs = EXCLUDED.tradeoffs,
+                    stakeholders = EXCLUDED.stakeholders,
+                    implementation_commits = EXCLUDED.implementation_commits,
+                    related_prs = EXCLUDED.related_prs,
+                    related_docs = EXCLUDED.related_docs,
+                    raw_analysis = EXCLUDED.raw_analysis,
+                    confidence_score = EXCLUDED.confidence_score,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING *
+            """,
+                org_id,
+                decision_data.get('decision_id'),
+                decision_data.get('ticket_key'),
+                decision_data.get('decision_summary'),
+                decision_data.get('problem_statement'),
+                json.dumps(decision_data.get('alternatives_considered', [])),
+                decision_data.get('chosen_approach'),
+                decision_data.get('rationale', decision_data.get('chosen_approach')),  # Use chosen_approach as rationale if not provided
+                json.dumps(decision_data.get('constraints', [])),
+                json.dumps(decision_data.get('risks', [])),
+                decision_data.get('tradeoffs', ''),
+                json.dumps(decision_data.get('stakeholders', [])),
+                json.dumps(decision_data.get('implementation_commits', [])),
+                json.dumps(decision_data.get('related_prs', [])),
+                json.dumps(decision_data.get('related_docs', [])),
+                decision_data.get('raw_analysis', ''),
+                decision_data.get('confidence_score', 0.8)
+            )
+            return dict(row)
+
+    async def get_decision(self, decision_id: str, org_id: str) -> Optional[Dict]:
+        """Get a decision by its ID."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT * FROM decisions
+                WHERE organization_id = $1 AND decision_id = $2
+            """, org_id, decision_id)
+            return dict(row) if row else None
+
+    async def get_decisions_by_ticket(self, ticket_key: str, org_id: str) -> List[Dict]:
+        """Get all decisions related to a specific ticket."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT * FROM decisions
+                WHERE organization_id = $1 AND ticket_key = $2
+                ORDER BY created_at DESC
+            """, org_id, ticket_key)
+            return [dict(row) for row in rows]
+
+    async def search_decisions(self, query: str, org_id: str, limit: int = 10) -> List[Dict]:
+        """Search decisions using full-text search."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT *,
+                    ts_rank(to_tsvector('english', decision_summary || ' ' || COALESCE(problem_statement, '') || ' ' || COALESCE(chosen_approach, '')), plainto_tsquery('english', $2)) as rank
+                FROM decisions
+                WHERE organization_id = $1
+                AND (
+                    to_tsvector('english', decision_summary) @@ plainto_tsquery('english', $2)
+                    OR to_tsvector('english', problem_statement) @@ plainto_tsquery('english', $2)
+                    OR to_tsvector('english', chosen_approach) @@ plainto_tsquery('english', $2)
+                )
+                ORDER BY rank DESC, created_at DESC
+                LIMIT $3
+            """, org_id, query, limit)
+            return [dict(row) for row in rows]
+
+    async def get_all_decisions(self, org_id: str, limit: int = 100) -> List[Dict]:
+        """Get all decisions for an organization."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT * FROM decisions
+                WHERE organization_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2
+            """, org_id, limit)
+            return [dict(row) for row in rows]
+
 # Global database service
 db_service = DatabaseService()

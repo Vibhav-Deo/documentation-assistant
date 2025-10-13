@@ -98,8 +98,10 @@ class AuthService:
             return payload
         except jwt.ExpiredSignatureError:
             raise HTTPException(status_code=401, detail="Token expired")
-        except jwt.JWTError:
+        except jwt.exceptions.DecodeError:
             raise HTTPException(status_code=401, detail="Invalid token")
+        except Exception as e:
+            raise HTTPException(status_code=401, detail=f"Authentication error: {str(e)}")
     
     async def get_current_user(self, credentials: HTTPAuthorizationCredentials = Depends(security)) -> User:
         """Get current authenticated user"""

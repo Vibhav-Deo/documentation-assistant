@@ -24,39 +24,58 @@ class JiraService:
         }
 
     def sync_project(self, project_key: str) -> List[Dict]:
-        """Sync all tickets from a Jira project"""
-        
+        """Sync all tickets from a Jira project with pagination"""
+
         # Test connection first
         if not self.test_connection():
             raise Exception("Failed to connect to Jira")
-        
+
         # Use the correct v3 search/jql endpoint as specified in the error
         url = f"{self.server}/rest/api/3/search/jql"
-        
-        # Use GET method with query parameters for search/jql endpoint
-        params = {
-            'jql': f'project = {project_key}',
-            'maxResults': 1000,
-            'expand': 'changelog,renderedFields',
-            'fields': '*all'
-        }
-        
-        response = requests.get(url, headers=self.headers, params=params)
-        
-        if response.status_code != 200:
-            print(f"Jira API Error: {response.status_code}")
-            print(f"Response: {response.text}")
-        
-        response.raise_for_status()
-        
-        data = response.json()
-        issues = data.get('issues', [])
-        
-        synced_tickets = []
-        for issue in issues:
-            ticket_data = self._extract_ticket_data(issue)
-            synced_tickets.append(ticket_data)
 
+        synced_tickets = []
+        start_at = 0
+        max_results = 100  # Fetch in batches of 100 (Jira's recommended batch size)
+        total_issues = None
+
+        # Pagination loop - fetch all tickets
+        while True:
+            params = {
+                'jql': f'project = {project_key}',
+                'startAt': start_at,
+                'maxResults': max_results,
+                'expand': 'changelog,renderedFields',
+                'fields': '*all'
+            }
+
+            response = requests.get(url, headers=self.headers, params=params)
+
+            if response.status_code != 200:
+                print(f"Jira API Error: {response.status_code}")
+                print(f"Response: {response.text}")
+
+            response.raise_for_status()
+
+            data = response.json()
+            issues = data.get('issues', [])
+            total_issues = data.get('total', 0)
+
+            # Extract ticket data from this batch
+            for issue in issues:
+                ticket_data = self._extract_ticket_data(issue)
+                synced_tickets.append(ticket_data)
+
+            # Log progress
+            print(f"Fetched {len(synced_tickets)}/{total_issues} tickets from {project_key}")
+
+            # Check if we've fetched all tickets
+            if len(synced_tickets) >= total_issues or len(issues) == 0:
+                break
+
+            # Move to next page
+            start_at += max_results
+
+        print(f"✅ Completed: Synced {len(synced_tickets)} tickets from {project_key}")
         return synced_tickets
 
     def _extract_ticket_data(self, issue: Dict) -> Dict:

@@ -60,7 +60,7 @@ qdrant_indexer = None
 # Initialize database on startup
 @app.on_event("startup")
 async def startup_event():
-    global relationship_service, qdrant_setup, qdrant_indexer
+    global relationship_service, qdrant_setup, qdrant_indexer, intent_analyzer
 
     # Initialize database pool
     await db_service.init_pool()
@@ -80,6 +80,11 @@ async def startup_event():
     for collection, status in collections_result.items():
         print(f"   {collection}: {status}")
     print("✅ Qdrant indexer initialized")
+
+    # Initialize IntentAnalyzer (Phase 8a: Decision Extraction)
+    from services.intent_analyzer import IntentAnalyzer
+    intent_analyzer = IntentAnalyzer(db_service, ai_service)
+    print("✅ IntentAnalyzer initialized")
 
 @app.get("/health")
 def health_check():
@@ -1462,6 +1467,165 @@ async def search_code_files_semantic(
             "results": results,
             "count": len(results),
             "source": "qdrant_semantic_search"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# INTENT ANALYZER: Decision Extraction Endpoints
+# ============================================================================
+
+# Initialize IntentAnalyzer (will be done at startup)
+intent_analyzer = None
+
+
+@app.post("/decisions/analyze/{ticket_key}")
+async def analyze_ticket_decision(
+    ticket_key: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Analyze and extract decision rationale for a specific ticket.
+
+    This is the core IntentAnalyzer feature - extracts the "WHY" behind
+    decisions by analyzing tickets, commits, PRs, and docs.
+
+    Example: POST /decisions/analyze/DEMO-001
+
+    Returns:
+    - problem_statement: What problem was being solved
+    - alternatives_considered: Other approaches evaluated
+    - chosen_approach: Which solution was implemented
+    - constraints: What limited the decision
+    - risks: Identified risks and mitigations
+    - stakeholders: People involved
+    """
+    try:
+        if not intent_analyzer:
+            raise HTTPException(status_code=503, detail="IntentAnalyzer not initialized")
+
+        org_id = current_user.organization_id
+
+        # Analyze the decision
+        decision = await intent_analyzer.analyze_ticket_decisions(ticket_key, org_id)
+
+        # Store the decision in database
+        stored_decision = await db_service.create_decision(decision, org_id)
+
+        return {
+            "status": "success",
+            "ticket_key": ticket_key,
+            "decision": stored_decision
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Decision analysis failed: {str(e)}")
+
+
+@app.get("/decisions/{decision_id}")
+async def get_decision(
+    decision_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get a specific decision by ID.
+
+    Example: GET /decisions/decision_DEMO-001
+    """
+    try:
+        org_id = current_user.organization_id
+        decision = await db_service.get_decision(decision_id, org_id)
+
+        if not decision:
+            raise HTTPException(status_code=404, detail=f"Decision {decision_id} not found")
+
+        return {
+            "status": "success",
+            "decision": decision
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/decisions/ticket/{ticket_key}")
+async def get_decisions_by_ticket(
+    ticket_key: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get all decisions related to a specific ticket.
+
+    Example: GET /decisions/ticket/DEMO-001
+    """
+    try:
+        org_id = current_user.organization_id
+        decisions = await db_service.get_decisions_by_ticket(ticket_key, org_id)
+
+        return {
+            "status": "success",
+            "ticket_key": ticket_key,
+            "decisions": decisions,
+            "count": len(decisions)
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/decisions/search")
+async def search_decisions(
+    query: str,
+    limit: int = 10,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Search decisions using natural language.
+
+    Example: GET /decisions/search?query=why mongodb&limit=5
+
+    Searches across decision summaries, problem statements, and chosen approaches.
+    """
+    try:
+        org_id = current_user.organization_id
+        decisions = await db_service.search_decisions(query, org_id, limit)
+
+        return {
+            "status": "success",
+            "query": query,
+            "decisions": decisions,
+            "count": len(decisions)
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/decisions")
+async def list_decisions(
+    limit: int = 100,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    List all decisions for the organization.
+
+    Example: GET /decisions?limit=50
+    """
+    try:
+        org_id = current_user.organization_id
+        decisions = await db_service.get_all_decisions(org_id, limit)
+
+        return {
+            "status": "success",
+            "decisions": decisions,
+            "count": len(decisions)
         }
 
     except Exception as e:
