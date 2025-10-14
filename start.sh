@@ -50,6 +50,10 @@ docker compose up -d
 echo "⏳ Waiting for services to start..."
 sleep 10
 
+# Run migrations
+echo "🔄 Running database migrations..."
+docker compose exec -T api python migrate.py
+
 # Check service health
 echo "🔍 Checking service health..."
 for i in {1..30}; do

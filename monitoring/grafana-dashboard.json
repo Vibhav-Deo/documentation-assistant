@@ -1,0 +1,65 @@
+{
+  "dashboard": {
+    "title": "Documentation Assistant - Performance Optimization",
+    "panels": [
+      {
+        "title": "Database Query Performance",
+        "targets": [
+          {
+            "expr": "rate(pg_stat_statements_mean_exec_time[5m])",
+            "legendFormat": "Avg Query Time"
+          }
+        ]
+      },
+      {
+        "title": "Cache Hit Rate",
+        "targets": [
+          {
+            "expr": "pg_stat_database_blks_hit / (pg_stat_database_blks_hit + pg_stat_database_blks_read) * 100",
+            "legendFormat": "PostgreSQL Cache Hit %"
+          },
+          {
+            "expr": "redis_keyspace_hits / (redis_keyspace_hits + redis_keyspace_misses) * 100",
+            "legendFormat": "Redis Cache Hit %"
+          }
+        ]
+      },
+      {
+        "title": "API Response Time (p95)",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "p95 latency"
+          }
+        ]
+      },
+      {
+        "title": "Database Connections",
+        "targets": [
+          {
+            "expr": "pg_stat_database_numbackends",
+            "legendFormat": "Active Connections"
+          }
+        ]
+      },
+      {
+        "title": "Redis Memory Usage",
+        "targets": [
+          {
+            "expr": "redis_memory_used_bytes / redis_memory_max_bytes * 100",
+            "legendFormat": "Memory Usage %"
+          }
+        ]
+      },
+      {
+        "title": "Index Usage",
+        "targets": [
+          {
+            "expr": "pg_stat_user_indexes_idx_scan",
+            "legendFormat": "Index Scans"
+          }
+        ]
+      }
+    ]
+  }
+}
