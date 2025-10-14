@@ -51,7 +51,7 @@ class SyncRequest(BaseModel):
 class Query(BaseModel):
     question: str
     session_id: Optional[str] = None
-    model: Optional[str] = "gpt-oss:120b"
+    model: Optional[str] = "mistral"
     max_results: Optional[int] = 5
     search_type: Optional[str] = "semantic"
 

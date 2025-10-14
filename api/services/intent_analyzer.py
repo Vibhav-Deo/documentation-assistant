@@ -66,7 +66,7 @@ class IntentAnalyzer:
         prompt = self._build_decision_prompt(context, ticket)
 
         # Use AI to analyze and extract decisions
-        analysis = self.ai.generate_response(prompt, model="gpt-oss:120b")
+        analysis = self.ai.generate_response(prompt, model="mistral")
 
         # Structure the response
         return {

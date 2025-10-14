@@ -2,6 +2,12 @@
 
 set -e  # Exit on any error
 
+# Parse arguments
+RUN_MIGRATIONS=false
+if [ "$1" = "--migrate" ]; then
+    RUN_MIGRATIONS=true
+fi
+
 echo "🚀 Starting Enterprise Confluence RAG with Ollama..."
 echo ""
 
@@ -44,15 +50,18 @@ docker compose down
 
 # Start services
 echo "🐳 Starting Docker services..."
+docker compose build --no-cache
 docker compose up -d
 
 # Wait for services to be ready
 echo "⏳ Waiting for services to start..."
 sleep 10
 
-# Run migrations
-echo "🔄 Running database migrations..."
-docker compose exec -T api python migrate.py
+# Run migrations if flag is set
+if [ "$RUN_MIGRATIONS" = true ]; then
+    echo "🔄 Running database migrations..."
+    docker compose exec -T api python /app/migrate.py
+fi
 
 # Check service health
 echo "🔍 Checking service health..."
@@ -85,5 +94,6 @@ echo ""
 echo "📝 Commands:"
 echo "   View logs: docker compose logs -f"
 echo "   Stop services: docker compose down"
+echo "   Run migrations: ./start.sh --migrate"
 echo "   Create demo users: ./init-seed.sh"
 echo "   Reset data: docker compose down -v && docker compose up -d"

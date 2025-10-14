@@ -13,23 +13,18 @@ class AIService:
             "support": "You are a customer support specialist."
         }
     
-    def generate_response(self, prompt: str, model: str = "gpt-oss:120b", temperature: float = 0.3) -> str:
-        """Generate AI response using Ollama (optimized for GPT-OSS:120B)"""
+    def generate_response(self, prompt: str, model: str = "mistral", temperature: float = 0.7) -> str:
+        """Generate AI response using Ollama (optimized for mistral)"""
         try:
-            # Optimized settings for large models (120B)
+            # Optimized settings for mistral (7B)
             options = {
                 "temperature": temperature,
-                "top_p": 0.95,
-                "top_k": 50,
+                "top_p": 0.9,
+                "top_k": 40,
                 "repeat_penalty": 1.1,
-                "num_ctx": 8192  # Larger context window for 120B
+                "num_ctx": 8192,
+                "num_predict": 2048
             }
-            
-            # Fallback settings for smaller models
-            if model in ["gpt-oss:120b", "mistral", "llama2", "codellama"]:
-                options["temperature"] = 0.7
-                options["top_p"] = 0.9
-                options["num_ctx"] = 4096
             
             payload = {
                 "model": model, 
@@ -114,28 +109,28 @@ class AIService:
     ) -> str:
         """
         Build comprehensive context from all sources for AI query.
-        ENHANCED: Larger context window for GPT-OSS:120B model.
+        ENHANCED: Larger context window for mistral model.
         """
         context_parts = []
 
-        # Add Confluence documentation (increased from 3 to 5, 500 to 1000 chars)
+        # Add Confluence documentation (3 results, 500 chars)
         if confluence_results:
             context_parts.append("=== DOCUMENTATION (Confluence) ===")
-            for i, doc in enumerate(confluence_results[:5], 1):
+            for i, doc in enumerate(confluence_results[:3], 1):
                 title = doc.get('title', 'Untitled')
-                text = doc.get('text', '')[:1000]
+                text = doc.get('text', '')[:500]
                 context_parts.append(f"\n[DOC-{i}] {title}")
                 context_parts.append(f"{text}...")
 
-        # Add Jira tickets (increased from 3 to 5, 300 to 600 chars)
+        # Add Jira tickets (3 results, 400 chars)
         if jira_results:
             context_parts.append("\n\n=== JIRA TICKETS ===")
-            for i, ticket in enumerate(jira_results[:5], 1):
+            for i, ticket in enumerate(jira_results[:3], 1):
                 key = ticket.get('ticket_key', 'N/A')
                 summary = ticket.get('summary', 'No summary')
                 status = ticket.get('status', 'Unknown')
                 priority = ticket.get('priority', 'N/A')
-                description = ticket.get('description', '')[:600]
+                description = ticket.get('description', '')[:400]
                 url = ticket.get('url', '')
 
                 if url:
@@ -143,18 +138,18 @@ class AIService:
                 else:
                     context_parts.append(f"\n[TICKET-{i}] {key}: {summary}")
 
-                context_parts.append(f"Status: {status} | Priority: {priority}")
+                context_parts.append(f"Status: {status}")
                 if description:
                     context_parts.append(f"Description: {description}...")
 
-        # Add Git commits (increased from 3 to 5, 200 to 400 chars)
+        # Add Git commits (3 results, 300 chars)
         if commit_results:
             context_parts.append("\n\n=== GIT COMMITS ===")
-            for i, commit in enumerate(commit_results[:5], 1):
+            for i, commit in enumerate(commit_results[:3], 1):
                 sha = commit.get('short_sha') or (commit.get('sha') or 'N/A')[:7]
-                message = commit.get('message', 'No message')[:400]
+                message = commit.get('message', 'No message')[:300]
                 author = commit.get('author_name', 'Unknown')
-                files = commit.get('files_changed', [])[:8]
+                files = commit.get('files_changed', [])[:5]
                 url = commit.get('url', '')
 
                 if url:
@@ -164,16 +159,16 @@ class AIService:
 
                 context_parts.append(f"Message: {message}")
                 if files:
-                    context_parts.append(f"Files changed: {', '.join(files)}")
+                    context_parts.append(f"Files: {', '.join(files)}")
 
-        # Add Code files (increased from 3 to 5)
+        # Add Code files (3 results)
         if code_results:
             context_parts.append("\n\n=== CODE FILES ===")
-            for i, file in enumerate(code_results[:5], 1):
+            for i, file in enumerate(code_results[:3], 1):
                 path = file.get('file_path', 'Unknown')
                 language = file.get('language', 'N/A')
-                functions = file.get('functions', [])[:8]
-                classes = file.get('classes', [])[:8]
+                functions = file.get('functions', [])[:5]
+                classes = file.get('classes', [])[:5]
                 url = file.get('url', '')
 
                 if url:
@@ -198,7 +193,7 @@ class AIService:
     ) -> str:
         """
         Build enhanced prompt for multi-source AI query.
-        ENHANCED: Chain-of-thought reasoning and confidence scoring for GPT-OSS:120B.
+        ENHANCED: Chain-of-thought reasoning and confidence scoring for mistral.
         """
         context = self.build_multi_source_context(
             confluence_results,
