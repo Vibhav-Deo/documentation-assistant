@@ -351,9 +351,8 @@ class RelationshipService:
 
     async def search_relationships(self, query: str, org_id: str, entity_types: Optional[List[str]] = None) -> Dict:
         """
-        Search across all entities and return relationships
-
-        entity_types: ['commits', 'prs', 'tickets', 'files', 'documents']
+        Search across all entities and return relationships.
+        OPTIMIZED: Parallel queries for better performance.
         """
         results = {
             "query": query,
@@ -367,73 +366,62 @@ class RelationshipService:
         if not entity_types:
             entity_types = ['commits', 'prs', 'tickets', 'files']
 
+        search_pattern = f'%{query}%'
+
         async with self.db.pool.acquire() as conn:
-            # Search commits
+            # OPTIMIZED: Execute all queries in parallel
+            tasks = []
+            
             if 'commits' in entity_types:
-                commits = await conn.fetch("""
+                tasks.append(('commits', conn.fetch("""
                     SELECT c.id, c.sha, c.message, c.author_name, c.commit_date,
                            c.ticket_references, r.repo_name
                     FROM commits c
-                    JOIN repositories r ON c.repository_id = r.id
+                    INNER JOIN repositories r ON c.repository_id = r.id
                     WHERE c.organization_id = $1
-                    AND (
-                        c.message ILIKE $2
-                        OR c.author_name ILIKE $2
-                    )
+                    AND (c.message ILIKE $2 OR c.author_name ILIKE $2)
                     ORDER BY c.commit_date DESC
                     LIMIT 20
-                """, org_id, f'%{query}%')
-                results["commits"] = [dict(row) for row in commits]
+                """, org_id, search_pattern)))
 
-            # Search pull requests
             if 'prs' in entity_types:
-                prs = await conn.fetch("""
+                tasks.append(('pull_requests', conn.fetch("""
                     SELECT pr.id, pr.pr_number, pr.title, pr.description,
-                           pr.author_name, pr.state, pr.ticket_references,
-                           r.repo_name
+                           pr.author_name, pr.state, pr.ticket_references, r.repo_name
                     FROM pull_requests pr
-                    JOIN repositories r ON pr.repository_id = r.id
+                    INNER JOIN repositories r ON pr.repository_id = r.id
                     WHERE pr.organization_id = $1
-                    AND (
-                        pr.title ILIKE $2
-                        OR pr.description ILIKE $2
-                        OR pr.author_name ILIKE $2
-                    )
+                    AND (pr.title ILIKE $2 OR pr.description ILIKE $2 OR pr.author_name ILIKE $2)
                     ORDER BY pr.created_at_pr DESC
                     LIMIT 20
-                """, org_id, f'%{query}%')
-                results["pull_requests"] = [dict(row) for row in prs]
+                """, org_id, search_pattern)))
 
-            # Search tickets
             if 'tickets' in entity_types:
-                tickets = await conn.fetch("""
+                tasks.append(('tickets', conn.fetch("""
                     SELECT ticket_key, summary, status, assignee, created_date
                     FROM jira_tickets
                     WHERE organization_id = $1
-                    AND (
-                        ticket_key ILIKE $2
-                        OR summary ILIKE $2
-                        OR description ILIKE $2
-                    )
+                    AND (ticket_key ILIKE $2 OR summary ILIKE $2 OR description ILIKE $2)
                     LIMIT 20
-                """, org_id, f'%{query}%')
-                results["tickets"] = [dict(row) for row in tickets]
+                """, org_id, search_pattern)))
 
-            # Search files
             if 'files' in entity_types:
-                files = await conn.fetch("""
+                tasks.append(('files', conn.fetch("""
                     SELECT cf.id, cf.file_path, cf.language, r.repo_name,
-                           COUNT(DISTINCT c.id) as commit_count
+                           (SELECT COUNT(*) FROM commits c 
+                            WHERE c.organization_id = cf.organization_id 
+                            AND cf.file_path = ANY(c.files_changed)) as commit_count
                     FROM code_files cf
                     LEFT JOIN repositories r ON cf.repository_id = r.id
-                    LEFT JOIN commits c ON cf.organization_id = c.organization_id
-                        AND cf.file_path = ANY(c.files_changed)
-                    WHERE cf.organization_id = $1
-                    AND cf.file_path ILIKE $2
-                    GROUP BY cf.id, cf.file_path, cf.language, r.repo_name
+                    WHERE cf.organization_id = $1 AND cf.file_path ILIKE $2
                     LIMIT 20
-                """, org_id, f'%{query}%')
-                results["files"] = [dict(row) for row in files]
+                """, org_id, search_pattern)))
+
+            # Execute all queries concurrently
+            import asyncio
+            for key, task in tasks:
+                rows = await task
+                results[key] = [dict(row) for row in rows]
 
         return results
 

@@ -5,6 +5,8 @@ from components.auth import render_login_page, check_authentication
 from components.admin import render_admin_panel
 from components.relationships import render_relationships_page
 from components.decisions import render_decisions_page
+from components.gaps import render_gaps_page
+from components.impact import render_impact_page
 
 # Page configuration
 st.set_page_config(
@@ -53,6 +55,22 @@ def main():
             st.session_state.show_decisions = False
             st.rerun()
         render_decisions_page()
+        return
+
+    # Check if gaps page should be shown
+    if st.session_state.get("show_gaps", False):
+        if st.button("← Back to Chat"):
+            st.session_state.show_gaps = False
+            st.rerun()
+        render_gaps_page()
+        return
+
+    # Check if impact page should be shown
+    if st.session_state.get("show_impact", False):
+        if st.button("← Back to Chat"):
+            st.session_state.show_impact = False
+            st.rerun()
+        render_impact_page()
         return
 
     # Render sidebar and get AI settings

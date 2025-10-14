@@ -51,6 +51,16 @@ def render_sidebar():
             st.session_state.show_decisions = True
             st.rerun()
 
+        # Gap Analysis
+        if st.button("🔍 Gap Analysis", use_container_width=True, key="gaps_btn"):
+            st.session_state.show_gaps = True
+            st.rerun()
+
+        # Impact Analysis
+        if st.button("🎯 Impact Analysis", use_container_width=True, key="impact_btn"):
+            st.session_state.show_impact = True
+            st.rerun()
+
         # Admin panel link
         if "user_info" in st.session_state and st.session_state.user_info["user"]["role"] == "admin":
             if st.button("🛠️ Admin Panel", use_container_width=True, key="admin_panel_btn"):

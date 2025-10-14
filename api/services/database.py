@@ -13,9 +13,29 @@ class DatabaseService:
         self.db_url = os.getenv("DATABASE_URL", "postgresql://postgres:password@postgres:5432/confluence_rag")
     
     async def init_pool(self):
-        """Initialize database connection pool"""
-        self.pool = await asyncpg.create_pool(self.db_url, min_size=5, max_size=20)
-        await self.create_tables()
+        """Initialize database connection pool with retry logic"""
+        max_retries = 5
+        retry_delay = 2
+        
+        for attempt in range(max_retries):
+            try:
+                self.pool = await asyncpg.create_pool(
+                    self.db_url, 
+                    min_size=5, 
+                    max_size=20,
+                    ssl=False,
+                    timeout=10
+                )
+                await self.create_tables()
+                print(f"✅ Database connected successfully")
+                return
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"⚠️  Database connection attempt {attempt + 1} failed, retrying in {retry_delay}s...")
+                    await asyncio.sleep(retry_delay)
+                else:
+                    print(f"❌ Database connection failed after {max_retries} attempts: {e}")
+                    raise
     
     async def create_tables(self):
         """Create database tables"""

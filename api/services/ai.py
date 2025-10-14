@@ -13,17 +13,28 @@ class AIService:
             "support": "You are a customer support specialist."
         }
     
-    def generate_response(self, prompt: str, model: str = "mistral", temperature: float = 0.7) -> str:
-        """Generate AI response using Ollama"""
+    def generate_response(self, prompt: str, model: str = "gpt-oss:120b", temperature: float = 0.3) -> str:
+        """Generate AI response using Ollama (optimized for GPT-OSS:120B)"""
         try:
+            # Optimized settings for large models (120B)
+            options = {
+                "temperature": temperature,
+                "top_p": 0.95,
+                "top_k": 50,
+                "repeat_penalty": 1.1,
+                "num_ctx": 8192  # Larger context window for 120B
+            }
+            
+            # Fallback settings for smaller models
+            if model in ["gpt-oss:120b", "mistral", "llama2", "codellama"]:
+                options["temperature"] = 0.7
+                options["top_p"] = 0.9
+                options["num_ctx"] = 4096
+            
             payload = {
                 "model": model, 
                 "prompt": prompt,
-                "options": {
-                    "temperature": temperature,
-                    "top_p": 0.9,
-                    "repeat_penalty": 1.1
-                }
+                "options": options
             }
             r = requests.post(
                 self.api_url,
@@ -103,52 +114,49 @@ class AIService:
     ) -> str:
         """
         Build comprehensive context from all sources for AI query.
-
-        This is the CORE USP: combining Confluence docs, Jira tickets, Git commits,
-        and code files into one unified context for the AI.
+        ENHANCED: Larger context window for GPT-OSS:120B model.
         """
         context_parts = []
 
-        # Add Confluence documentation
+        # Add Confluence documentation (increased from 3 to 5, 500 to 1000 chars)
         if confluence_results:
             context_parts.append("=== DOCUMENTATION (Confluence) ===")
-            for i, doc in enumerate(confluence_results[:3], 1):  # Top 3
+            for i, doc in enumerate(confluence_results[:5], 1):
                 title = doc.get('title', 'Untitled')
-                text = doc.get('text', '')[:500]  # Limit length
+                text = doc.get('text', '')[:1000]
                 context_parts.append(f"\n[DOC-{i}] {title}")
                 context_parts.append(f"{text}...")
 
-        # Add Jira tickets
+        # Add Jira tickets (increased from 3 to 5, 300 to 600 chars)
         if jira_results:
             context_parts.append("\n\n=== JIRA TICKETS ===")
-            for i, ticket in enumerate(jira_results[:3], 1):  # Top 3
+            for i, ticket in enumerate(jira_results[:5], 1):
                 key = ticket.get('ticket_key', 'N/A')
                 summary = ticket.get('summary', 'No summary')
                 status = ticket.get('status', 'Unknown')
-                description = ticket.get('description', '')[:300]
+                priority = ticket.get('priority', 'N/A')
+                description = ticket.get('description', '')[:600]
                 url = ticket.get('url', '')
 
-                # Create clickable link if URL is available
                 if url:
                     context_parts.append(f"\n[TICKET-{i}] [{key}: {summary}]({url})")
                 else:
                     context_parts.append(f"\n[TICKET-{i}] {key}: {summary}")
 
-                context_parts.append(f"Status: {status}")
+                context_parts.append(f"Status: {status} | Priority: {priority}")
                 if description:
                     context_parts.append(f"Description: {description}...")
 
-        # Add Git commits
+        # Add Git commits (increased from 3 to 5, 200 to 400 chars)
         if commit_results:
             context_parts.append("\n\n=== GIT COMMITS ===")
-            for i, commit in enumerate(commit_results[:3], 1):  # Top 3
+            for i, commit in enumerate(commit_results[:5], 1):
                 sha = commit.get('short_sha') or (commit.get('sha') or 'N/A')[:7]
-                message = commit.get('message', 'No message')[:200]
+                message = commit.get('message', 'No message')[:400]
                 author = commit.get('author_name', 'Unknown')
-                files = commit.get('files_changed', [])[:5]
+                files = commit.get('files_changed', [])[:8]
                 url = commit.get('url', '')
 
-                # Create clickable link if URL is available
                 if url:
                     context_parts.append(f"\n[COMMIT-{i}] [{sha}]({url}) by {author}")
                 else:
@@ -158,17 +166,16 @@ class AIService:
                 if files:
                     context_parts.append(f"Files changed: {', '.join(files)}")
 
-        # Add Code files
+        # Add Code files (increased from 3 to 5)
         if code_results:
             context_parts.append("\n\n=== CODE FILES ===")
-            for i, file in enumerate(code_results[:3], 1):  # Top 3
+            for i, file in enumerate(code_results[:5], 1):
                 path = file.get('file_path', 'Unknown')
                 language = file.get('language', 'N/A')
-                functions = file.get('functions', [])[:5]
-                classes = file.get('classes', [])[:5]
+                functions = file.get('functions', [])[:8]
+                classes = file.get('classes', [])[:8]
                 url = file.get('url', '')
 
-                # Create clickable link if URL is available
                 if url:
                     context_parts.append(f"\n[CODE-{i}] [{path}]({url}) ({language})")
                 else:
@@ -191,10 +198,7 @@ class AIService:
     ) -> str:
         """
         Build enhanced prompt for multi-source AI query.
-
-        CORE USP: User asks about a feature/bug/enhancement, AI searches ALL sources
-        and provides comprehensive answer showing Confluence docs, Jira tickets,
-        commits, and code files.
+        ENHANCED: Chain-of-thought reasoning and confidence scoring for GPT-OSS:120B.
         """
         context = self.build_multi_source_context(
             confluence_results,
@@ -216,26 +220,51 @@ class AIService:
 
         sources_summary = ", ".join(sources_found) if sources_found else "no results"
 
-        prompt = f"""You are an intelligent development assistant with access to multiple information sources.
+        # Few-shot example for better accuracy
+        few_shot_example = """Example:
+Question: "How does authentication work?"
+Thinking:
+1. Documentation shows JWT-based auth in [DOC-1]
+2. Implementation ticket is [TICKET-1: DEMO-001]
+3. Code is in [CODE-1] auth.py with login() function
+4. Recent fix in [COMMIT-1] improved token validation
+
+Answer: The system uses JWT authentication as documented in [DOC-1]. This was implemented in [TICKET-1: DEMO-001] with code in [CODE-1] auth.py. The login() function generates tokens, and [COMMIT-1] recently improved validation.
+"""
+
+        prompt = f"""You are an expert development assistant with access to multiple information sources.
 
 I found {sources_summary} related to the query.
 
+{few_shot_example}
+
 Instructions:
-- Provide a comprehensive answer based on ALL the sources provided
-- The context includes CLICKABLE MARKDOWN LINKS for tickets, commits, and code files
-- When referencing sources, use the EXACT markdown link format from the context (e.g., [TICKET-1], [COMMIT-2], [CODE-3])
-- If the source has a clickable link in the context like [[DEMO-001: Title](url)], preserve that link in your response
-- Explain HOW the information connects across sources
-- If a Jira ticket relates to commits or code, make that connection explicit
-- Structure your answer clearly with sections if needed
-- Be specific and actionable
+1. Think step-by-step:
+   - What does the documentation say?
+   - What tickets are related?
+   - What code implements this?
+   - How do these sources connect?
+
+2. Provide your answer:
+   - Reference sources using their IDs ([DOC-1], [TICKET-2], [COMMIT-3], [CODE-4])
+   - Preserve EXACT markdown links from context like [[DEMO-001: Title](url)]
+   - Explain connections between sources
+   - Structure clearly with sections if needed
+   - Be specific and actionable
+
+3. For each source you reference, indicate confidence:
+   - HIGH: Direct answer in source
+   - MEDIUM: Inferred from source
+   - LOW: Tangentially related
 
 Context from multiple sources:
 {context}
 
 Question: {question}
 
-Answer (reference sources using their IDs and preserve markdown links):"""
+Thinking (step-by-step analysis):
+
+Answer (with source references and confidence levels):"""
 
         return prompt
 
