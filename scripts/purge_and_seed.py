@@ -10,10 +10,13 @@ This script will:
 import asyncio
 import asyncpg
 from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams, PointStruct
+from sentence_transformers import SentenceTransformer
 from datetime import datetime, timedelta
 import random
 import sys
 import os
+import uuid
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -786,6 +789,199 @@ async def seed_confluence_docs(org_id: str):
         await conn.close()
 
 
+def create_qdrant_collections(qdrant_client):
+    """Create Qdrant collections for vector search"""
+    print("\n📦 Creating Qdrant collections...")
+
+    collections = [
+        "jira_tickets",
+        "commits",
+        "pull_requests",
+        "code_files"
+    ]
+
+    for collection_name in collections:
+        try:
+            qdrant_client.create_collection(
+                collection_name=collection_name,
+                vectors_config=VectorParams(size=384, distance=Distance.COSINE)
+            )
+            print(f"  ✅ Created collection: {collection_name}")
+        except Exception as e:
+            print(f"  ⚠️  Error creating {collection_name}: {e}")
+
+
+async def index_to_qdrant(org_id: str):
+    """Index all seeded data into Qdrant"""
+    print("\n🔍 Indexing data into Qdrant...")
+
+    conn = await asyncpg.connect(**DB_CONFIG)
+    qdrant_client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+
+    print("  🔄 Loading embedding model (all-MiniLM-L6-v2)...")
+    embedder = SentenceTransformer('all-MiniLM-L6-v2')
+    print("  ✅ Embedding model loaded")
+
+    try:
+        # Index Jira tickets
+        print("  🎫 Indexing Jira tickets...")
+        tickets = await conn.fetch("""
+            SELECT id, ticket_key, summary, description, issue_type,
+                   status, priority, assignee, labels, components
+            FROM jira_tickets
+            WHERE organization_id = $1
+        """, org_id)
+
+        if tickets:
+            points = []
+            for ticket in tickets:
+                text = f"{ticket['ticket_key']}: {ticket['summary']}\n\n{ticket['description'] or ''}"
+                embedding = embedder.encode(text).tolist()
+
+                point = PointStruct(
+                    id=str(uuid.uuid4()),
+                    vector=embedding,
+                    payload={
+                        "ticket_id": str(ticket['id']),
+                        "ticket_key": ticket['ticket_key'],
+                        "summary": ticket['summary'],
+                        "description": ticket['description'],
+                        "issue_type": ticket['issue_type'],
+                        "status": ticket['status'],
+                        "priority": ticket['priority'],
+                        "assignee": ticket['assignee'],
+                        "labels": ticket['labels'],
+                        "components": ticket['components'],
+                        "source_type": "jira",
+                        "organization_id": str(org_id)
+                    }
+                )
+                points.append(point)
+
+            qdrant_client.upsert(collection_name="jira_tickets", points=points)
+            print(f"    ✅ Indexed {len(points)} Jira tickets")
+
+        # Index commits
+        print("  📝 Indexing commits...")
+        commits = await conn.fetch("""
+            SELECT id, sha, message, author_name, author_email,
+                   commit_date, files_changed
+            FROM commits
+            WHERE organization_id = $1
+        """, org_id)
+
+        if commits:
+            points = []
+            for commit in commits:
+                text = f"Commit {commit['sha'][:7]}: {commit['message']}\nFiles: {', '.join(commit['files_changed'] or [])}"
+                embedding = embedder.encode(text).tolist()
+
+                point = PointStruct(
+                    id=str(uuid.uuid4()),
+                    vector=embedding,
+                    payload={
+                        "commit_id": str(commit['id']),
+                        "sha": commit['sha'],
+                        "message": commit['message'],
+                        "author_name": commit['author_name'],
+                        "author_email": commit['author_email'],
+                        "commit_date": str(commit['commit_date']),
+                        "files_changed": commit['files_changed'],
+                        "source_type": "commit",
+                        "organization_id": str(org_id)
+                    }
+                )
+                points.append(point)
+
+            qdrant_client.upsert(collection_name="commits", points=points)
+            print(f"    ✅ Indexed {len(points)} commits")
+
+        # Index pull requests
+        print("  🔀 Indexing pull requests...")
+        prs = await conn.fetch("""
+            SELECT id, pr_number, title, description, author_name,
+                   state, created_at, merged_at
+            FROM pull_requests
+            WHERE organization_id = $1
+        """, org_id)
+
+        if prs:
+            points = []
+            for pr in prs:
+                text = f"PR #{pr['pr_number']}: {pr['title']}\n\n{pr['description'] or ''}"
+                embedding = embedder.encode(text).tolist()
+
+                point = PointStruct(
+                    id=str(uuid.uuid4()),
+                    vector=embedding,
+                    payload={
+                        "pr_id": str(pr['id']),
+                        "pr_number": pr['pr_number'],
+                        "title": pr['title'],
+                        "description": pr['description'],
+                        "author_name": pr['author_name'],
+                        "state": pr['state'],
+                        "created_at": str(pr['created_at']),
+                        "merged_at": str(pr['merged_at']) if pr['merged_at'] else None,
+                        "source_type": "pull_request",
+                        "organization_id": str(org_id)
+                    }
+                )
+                points.append(point)
+
+            qdrant_client.upsert(collection_name="pull_requests", points=points)
+            print(f"    ✅ Indexed {len(points)} pull requests")
+
+        # Index code files
+        print("  📂 Indexing code files...")
+        files = await conn.fetch("""
+            SELECT id, file_path, file_name, file_type, language,
+                   content, functions, classes, line_count
+            FROM code_files
+            WHERE organization_id = $1
+        """, org_id)
+
+        if files:
+            points = []
+            for file in files:
+                text = f"{file['file_path']}\n\n{file['content'][:1000]}"
+                embedding = embedder.encode(text).tolist()
+
+                point = PointStruct(
+                    id=str(uuid.uuid4()),
+                    vector=embedding,
+                    payload={
+                        "file_id": str(file['id']),
+                        "file_path": file['file_path'],
+                        "file_name": file['file_name'],
+                        "file_type": file['file_type'],
+                        "language": file['language'],
+                        "content": file['content'][:2000],
+                        "functions": file['functions'],
+                        "classes": file['classes'],
+                        "line_count": file['line_count'],
+                        "source_type": "code",
+                        "organization_id": str(org_id)
+                    }
+                )
+                points.append(point)
+
+            qdrant_client.upsert(collection_name="code_files", points=points)
+            print(f"    ✅ Indexed {len(points)} code files")
+
+        # Verify indexing
+        print("\n  📊 Qdrant Collections:")
+        for collection in ["jira_tickets", "commits", "pull_requests", "code_files"]:
+            try:
+                info = qdrant_client.get_collection(collection)
+                print(f"    • {collection}: {info.points_count} points")
+            except:
+                print(f"    • {collection}: 0 points")
+
+    finally:
+        await conn.close()
+
+
 async def main():
     """Main execution"""
     print("=" * 60)
@@ -799,7 +995,7 @@ async def main():
     await purge_postgresql()
     purge_qdrant()
 
-    # Seed
+    # Seed PostgreSQL
     org_id = await seed_organization()
     await seed_jira_tickets(org_id)
 
@@ -809,6 +1005,20 @@ async def main():
     await seed_code_files(org_id, repo_id)
 
     await seed_confluence_docs(org_id)
+
+    # Index to Qdrant
+    print("\n" + "=" * 60)
+    print("INDEXING TO QDRANT")
+    print("=" * 60)
+
+    try:
+        qdrant_client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+        create_qdrant_collections(qdrant_client)
+        await index_to_qdrant(org_id)
+        print("✅ Qdrant indexing complete!")
+    except Exception as e:
+        print(f"⚠️  Warning: Qdrant indexing failed: {e}")
+        print("   PostgreSQL data seeded successfully, but vector search may not work.")
 
     print("\n" + "=" * 60)
     print("✅ PURGE AND SEED COMPLETE!")
