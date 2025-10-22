@@ -3,9 +3,9 @@
 set -e  # Exit on any error
 
 # Parse arguments
-RUN_MIGRATIONS=false
-if [ "$1" = "--migrate" ]; then
-    RUN_MIGRATIONS=true
+INIT_DB=false
+if [ "$1" = "--init-db" ]; then
+    INIT_DB=true
 fi
 
 echo "🚀 Starting Enterprise Confluence RAG with Ollama..."
@@ -57,10 +57,11 @@ docker compose up -d
 echo "⏳ Waiting for services to start..."
 sleep 10
 
-# Run migrations if flag is set
-if [ "$RUN_MIGRATIONS" = true ]; then
-    echo "🔄 Running database migrations..."
-    docker compose exec -T api python /app/migrate.py
+# Initialize database if flag is set or if it's the first time
+if [ "$INIT_DB" = true ]; then
+    echo "🔄 Initializing database with schema and seed data..."
+    docker compose exec -T postgres psql -U postgres -d confluence_rag -f /scripts/init_database.sql 2>/dev/null || \
+    python3 scripts/init_database.py
 fi
 
 # Check service health
@@ -86,7 +87,7 @@ echo "   📆 API Docs: http://localhost:4000/docs"
 echo "   📊 Grafana: http://localhost:3000 (admin/admin)"
 echo "   🔍 Qdrant: http://localhost:6333/dashboard"
 echo ""
-echo "👤 Demo Accounts (run ./init-seed.sh first):"
+echo "👤 Demo Accounts (run ./start.sh --init-db to create):"
 echo "   Admin: admin@acmecorp.com / admin123"
 echo "   User: user@acmecorp.com / user123"
 echo "   Demo: demo@example.com / demo123"
@@ -94,6 +95,5 @@ echo ""
 echo "📝 Commands:"
 echo "   View logs: docker compose logs -f"
 echo "   Stop services: docker compose down"
-echo "   Run migrations: ./start.sh --migrate"
-echo "   Create demo users: ./init-seed.sh"
-echo "   Reset data: docker compose down -v && docker compose up -d"
+echo "   Initialize database: ./start.sh --init-db"
+echo "   Reset data: docker compose down -v && ./start.sh --init-db"
