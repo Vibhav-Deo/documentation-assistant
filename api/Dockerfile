@@ -16,12 +16,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install Python dependencies
-COPY requirements.txt .
+COPY api/requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY . .
+COPY api/ .
+
+# Copy scripts directory (for database initialization)
+COPY scripts/ /app/scripts
 
 # Change ownership to non-root user
 RUN chown -R appuser:appuser /app && \

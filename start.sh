@@ -2,12 +2,6 @@
 
 set -e  # Exit on any error
 
-# Parse arguments
-INIT_DB=false
-if [ "$1" = "--init-db" ]; then
-    INIT_DB=true
-fi
-
 echo "🚀 Starting Enterprise Confluence RAG with Ollama..."
 echo ""
 
@@ -55,14 +49,8 @@ docker compose up -d
 
 # Wait for services to be ready
 echo "⏳ Waiting for services to start..."
+echo "   (Database will auto-initialize on first startup)"
 sleep 10
-
-# Initialize database if flag is set or if it's the first time
-if [ "$INIT_DB" = true ]; then
-    echo "🔄 Initializing database with schema and seed data..."
-    docker compose exec -T postgres psql -U postgres -d confluence_rag -f /scripts/init_database.sql 2>/dev/null || \
-    python3 scripts/init_database.py
-fi
 
 # Check service health
 echo "🔍 Checking service health..."
@@ -87,13 +75,17 @@ echo "   📆 API Docs: http://localhost:4000/docs"
 echo "   📊 Grafana: http://localhost:3000 (admin/admin)"
 echo "   🔍 Qdrant: http://localhost:6333/dashboard"
 echo ""
-echo "👤 Demo Accounts (run ./start.sh --init-db to create):"
+echo "👤 Demo Accounts (auto-created on first startup):"
 echo "   Admin: admin@acmecorp.com / admin123"
-echo "   User: user@acmecorp.com / user123"
-echo "   Demo: demo@example.com / demo123"
+echo "   User:  user@acmecorp.com / user123"
+echo "   Demo:  demo@example.com / demo123"
 echo ""
-echo "📝 Commands:"
+echo "💡 First-time setup:"
+echo "   The database and seed data are automatically created on first startup."
+echo "   Check API logs to see initialization progress: docker compose logs -f api"
+echo ""
+echo "📝 Useful Commands:"
 echo "   View logs: docker compose logs -f"
 echo "   Stop services: docker compose down"
-echo "   Initialize database: ./start.sh --init-db"
-echo "   Reset data: docker compose down -v && ./start.sh --init-db"
+echo "   Reset all data: docker compose down -v && ./start.sh"
+echo "   Re-seed manually: docker exec -it <api-container> python3 scripts/init_database.py"

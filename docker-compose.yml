@@ -73,7 +73,9 @@ services:
 
   # Application Services
   api:
-    build: ./api
+    build:
+      context: .
+      dockerfile: ./api/Dockerfile
     env_file:
       - .env
     environment:
@@ -106,14 +108,37 @@ services:
           memory: 1G
           cpus: '1'
 
-  ui:
-    build: ./ui
+  # Legacy Streamlit UI (deprecated - use frontend service instead)
+  # ui:
+  #   build: ./ui
+  #   depends_on:
+  #     api:
+  #       condition: service_healthy
+  #   ports:
+  #     - "8501:8501"
+  #   restart: unless-stopped
+
+  # Next.js Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
     depends_on:
       api:
         condition: service_healthy
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:4000
     ports:
-      - "8501:8501"
+      - "4002:4002"
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
 
   # Monitoring Services
   prometheus:

@@ -57,6 +57,231 @@ relationship_service = None
 qdrant_setup = None
 qdrant_indexer = None
 
+
+async def auto_initialize_database():
+    """
+    Auto-initialize database schema and seed data on first startup.
+    Checks if organizations table exists and has data.
+    """
+    import subprocess
+    import os
+
+    try:
+        # Check if organizations table exists and has data
+        async with db_service.pool.acquire() as conn:
+            # Check if table exists
+            table_exists = await conn.fetchval("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_name = 'organizations'
+                );
+            """)
+
+            if not table_exists:
+                print("🔄 First-time setup detected - initializing database...")
+                print("   Running init_database.sql and indexing to Qdrant...")
+
+                # Run the SQL initialization script
+                script_path = os.path.join(os.path.dirname(__file__), "scripts", "init_database.sql")
+
+                if os.path.exists(script_path):
+                    with open(script_path, 'r') as f:
+                        sql_content = f.read()
+
+                    # Execute the SQL
+                    await conn.execute(sql_content)
+                    print("✅ Database schema and seed data created")
+
+                    # Now index to Qdrant
+                    await initialize_qdrant_from_seed()
+
+                else:
+                    print("⚠️  init_database.sql not found, skipping auto-initialization")
+
+            else:
+                # Table exists, check if it has data
+                org_count = await conn.fetchval("SELECT COUNT(*) FROM organizations")
+
+                if org_count == 0:
+                    print("⚠️  Database tables exist but no data found.")
+                    print("   Run: docker exec <container> python3 scripts/init_database.py")
+                else:
+                    print(f"✅ Database already initialized ({org_count} organizations)")
+
+    except Exception as e:
+        print(f"⚠️  Database auto-initialization check failed: {e}")
+        print("   Continuing with startup...")
+
+
+async def initialize_qdrant_from_seed():
+    """Index seeded data into Qdrant after SQL initialization"""
+    try:
+        from sentence_transformers import SentenceTransformer
+        from qdrant_client.models import Distance, VectorParams, PointStruct
+        import uuid
+
+        print("\n🔍 Indexing seed data to Qdrant...")
+
+        # Get the organization ID
+        async with db_service.pool.acquire() as conn:
+            org_id = await conn.fetchval("SELECT id FROM organizations LIMIT 1")
+
+            if not org_id:
+                print("⚠️  No organization found for indexing")
+                return
+
+            # Create collections if needed
+            collections = ["jira_tickets", "commits", "pull_requests", "code_files"]
+            for collection_name in collections:
+                try:
+                    qdrant.create_collection(
+                        collection_name=collection_name,
+                        vectors_config=VectorParams(size=384, distance=Distance.COSINE)
+                    )
+                except:
+                    pass  # Collection might already exist
+
+            # Index Jira tickets
+            tickets = await conn.fetch("""
+                SELECT id, ticket_key, summary, description, issue_type,
+                       status, priority, assignee, labels, components
+                FROM jira_tickets WHERE organization_id = $1
+            """, org_id)
+
+            if tickets:
+                points = []
+                for ticket in tickets:
+                    text = f"{ticket['ticket_key']}: {ticket['summary']}\n\n{ticket['description'] or ''}"
+                    embedding = embedder.encode(text).tolist()
+
+                    points.append(PointStruct(
+                        id=str(uuid.uuid4()),
+                        vector=embedding,
+                        payload={
+                            "ticket_id": str(ticket['id']),
+                            "ticket_key": ticket['ticket_key'],
+                            "summary": ticket['summary'],
+                            "description": ticket['description'],
+                            "issue_type": ticket['issue_type'],
+                            "status": ticket['status'],
+                            "priority": ticket['priority'],
+                            "assignee": ticket['assignee'],
+                            "labels": ticket['labels'],
+                            "components": ticket['components'],
+                            "source_type": "jira",
+                            "organization_id": str(org_id)
+                        }
+                    ))
+
+                qdrant.upsert(collection_name="jira_tickets", points=points)
+                print(f"  ✅ Indexed {len(points)} Jira tickets")
+
+            # Index commits
+            commits = await conn.fetch("""
+                SELECT id, sha, message, author_name, author_email,
+                       commit_date, files_changed
+                FROM commits WHERE organization_id = $1
+            """, org_id)
+
+            if commits:
+                points = []
+                for commit in commits:
+                    text = f"Commit {commit['sha'][:7]}: {commit['message']}\nFiles: {', '.join(commit['files_changed'] or [])}"
+                    embedding = embedder.encode(text).tolist()
+
+                    points.append(PointStruct(
+                        id=str(uuid.uuid4()),
+                        vector=embedding,
+                        payload={
+                            "commit_id": str(commit['id']),
+                            "sha": commit['sha'],
+                            "message": commit['message'],
+                            "author_name": commit['author_name'],
+                            "author_email": commit['author_email'],
+                            "commit_date": str(commit['commit_date']),
+                            "files_changed": commit['files_changed'],
+                            "source_type": "commit",
+                            "organization_id": str(org_id)
+                        }
+                    ))
+
+                qdrant.upsert(collection_name="commits", points=points)
+                print(f"  ✅ Indexed {len(points)} commits")
+
+            # Index pull requests
+            prs = await conn.fetch("""
+                SELECT id, pr_number, title, description, author_name,
+                       state, created_at, merged_at
+                FROM pull_requests WHERE organization_id = $1
+            """, org_id)
+
+            if prs:
+                points = []
+                for pr in prs:
+                    text = f"PR #{pr['pr_number']}: {pr['title']}\n\n{pr['description'] or ''}"
+                    embedding = embedder.encode(text).tolist()
+
+                    points.append(PointStruct(
+                        id=str(uuid.uuid4()),
+                        vector=embedding,
+                        payload={
+                            "pr_id": str(pr['id']),
+                            "pr_number": pr['pr_number'],
+                            "title": pr['title'],
+                            "description": pr['description'],
+                            "author_name": pr['author_name'],
+                            "state": pr['state'],
+                            "created_at": str(pr['created_at']),
+                            "merged_at": str(pr['merged_at']) if pr['merged_at'] else None,
+                            "source_type": "pull_request",
+                            "organization_id": str(org_id)
+                        }
+                    ))
+
+                qdrant.upsert(collection_name="pull_requests", points=points)
+                print(f"  ✅ Indexed {len(points)} pull requests")
+
+            # Index code files
+            files = await conn.fetch("""
+                SELECT id, file_path, file_name, file_type, language,
+                       content, functions, classes, line_count
+                FROM code_files WHERE organization_id = $1
+            """, org_id)
+
+            if files:
+                points = []
+                for file in files:
+                    text = f"{file['file_path']}\n\n{file['content'][:1000]}"
+                    embedding = embedder.encode(text).tolist()
+
+                    points.append(PointStruct(
+                        id=str(uuid.uuid4()),
+                        vector=embedding,
+                        payload={
+                            "file_id": str(file['id']),
+                            "file_path": file['file_path'],
+                            "file_name": file['file_name'],
+                            "file_type": file['file_type'],
+                            "language": file['language'],
+                            "content": file['content'][:2000],
+                            "functions": file['functions'],
+                            "classes": file['classes'],
+                            "line_count": file['line_count'],
+                            "source_type": "code",
+                            "organization_id": str(org_id)
+                        }
+                    ))
+
+                qdrant.upsert(collection_name="code_files", points=points)
+                print(f"  ✅ Indexed {len(points)} code files")
+
+            print("✅ Qdrant indexing complete!")
+
+    except Exception as e:
+        print(f"⚠️  Qdrant indexing failed: {e}")
+        print("   Vector search may not work until data is indexed")
+
+
 # Initialize database on startup
 @app.on_event("startup")
 async def startup_event():
@@ -64,6 +289,9 @@ async def startup_event():
 
     # Initialize database pool
     await db_service.init_pool()
+
+    # Check if database needs initialization (first-time setup)
+    await auto_initialize_database()
 
     # Initialize relationship service after database pool is ready
     relationship_service = RelationshipService(db_service)

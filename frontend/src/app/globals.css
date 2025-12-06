@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-start-rgb: 255, 255, 255;
+  --background-end-rgb: 255, 255, 255;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: rgb(var(--background-start-rgb));
+}
+
+/* Ensure all inputs, textareas, and selects have dark text */
+input:not([type="checkbox"]):not([type="radio"]), textarea, select {
+  color: rgb(17, 24, 39) !important;
+}
+
+input::placeholder, textarea::placeholder {
+  color: rgb(107, 114, 128) !important;
+}
+
+input:disabled, textarea:disabled, select:disabled {
+  color: rgb(75, 85, 99) !important;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}

@@ -18,6 +18,18 @@ A production-ready Retrieval-Augmented Generation (RAG) system with enterprise a
 - 🔐 **Authentication**: Email/password + OAuth (Google/Microsoft)
 - 💾 **Production Stack**: PostgreSQL, Redis, monitoring with Prometheus/Grafana
 
+## 🎨 User Interface
+
+### Modern React Frontend (Recommended)
+- **Framework**: Next.js 16 with TypeScript
+- **Styling**: Tailwind CSS
+- **Features**: Full-featured dashboard with real-time chat, knowledge graphs, admin panel
+- **Port**: http://localhost:3001
+
+### Legacy Streamlit UI (Deprecated)
+- Simple Python interface (being phased out)
+- Port: http://localhost:8501
+
 ## 🛠️ Quick Start
 
 ### Prerequisites
@@ -45,35 +57,38 @@ curl http://localhost:11434/api/tags
 
 ### 3. Start Services
 ```bash
-# Start all services
+# Start all services (database will auto-initialize on first run)
 ./start.sh
 
 # Or manually:
 docker compose up -d
 ```
 
-### 4. Create Seed Data
-```bash
-# Create demo users and organizations
-./init-seed.sh
-```
+**That's it!** The database will automatically:
+- Create schema and tables
+- Insert seed data (users, tickets, commits, etc.)
+- Generate vector embeddings
+- Index all data into Qdrant
 
-### 5. Access Application
-- **UI**: http://localhost:8501
+### 4. Access the Application
+
+- **React Frontend**: http://localhost:3001 ⭐ (Recommended)
 - **API**: http://localhost:4000
-- **API Docs**: http://localhost:4000/docs
-- **Grafana**: http://localhost:3000 (admin/admin)
+- **API Documentation**: http://localhost:4000/docs
+- **Grafana Dashboards**: http://localhost:3000 (admin/admin)
+- **Prometheus Metrics**: http://localhost:9090
 - **Qdrant**: http://localhost:6333/dashboard
+- **Legacy Streamlit UI**: http://localhost:8501 (deprecated)
 
 ## 👤 Demo Accounts
 
-After running `./init-seed.sh`:
+Automatically created on first startup:
 
 | Email | Password | Role | Plan | Quota |
 |-------|----------|------|------|-------|
-| demo@example.com | demo123 | User | Enterprise | Unlimited |
-| admin@acmecorp.com | admin123 | Admin | Pro | 10,000/month |
+| admin@acmecorp.com | admin123 | Admin | Enterprise | Unlimited |
 | user@acmecorp.com | user123 | User | Pro | 10,000/month |
+| demo@example.com | demo123 | User | Pro | 10,000/month |
 
 ## 📖 Usage Guide
 

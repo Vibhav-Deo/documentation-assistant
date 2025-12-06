@@ -106,64 +106,77 @@ CREATE TABLE commits (
 -- Code files table
 CREATE TABLE code_files (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
     repository_id UUID NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
     file_path TEXT NOT NULL,
+    file_name VARCHAR(255) NOT NULL,
+    file_type VARCHAR(50),
     language VARCHAR(50),
-    size_bytes INTEGER,
+    content TEXT,
     functions TEXT[],
     classes TEXT[],
     imports TEXT[],
+    line_count INTEGER,
+    last_modified TIMESTAMP,
     metadata JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    UNIQUE(repository_id, file_path)
 );
 
 -- Pull requests table
 CREATE TABLE pull_requests (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-    repository_id UUID NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    repository_id UUID REFERENCES repositories(id) ON DELETE CASCADE,
+    organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
     pr_number INTEGER NOT NULL,
-    title TEXT NOT NULL,
+    title TEXT,
     description TEXT,
-    status VARCHAR(50),
-    author VARCHAR(255),
-    created_date TIMESTAMP,
-    merged_date TIMESTAMP,
+    author_name VARCHAR(255),
+    state VARCHAR(50),
+    created_at_pr TIMESTAMP,
+    merged_at TIMESTAMP,
+    closed_at TIMESTAMP,
+    commit_shas TEXT[],
     ticket_references TEXT[],
-    files_changed TEXT[],
     metadata JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(repository_id, pr_number)
 );
 
 -- Decisions table
 CREATE TABLE decisions (
-    id VARCHAR(255) PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    decision_id VARCHAR(255) NOT NULL,
     ticket_key VARCHAR(50) NOT NULL,
     decision_summary TEXT,
     problem_statement TEXT,
     alternatives_considered JSONB,
     chosen_approach TEXT,
-    constraints TEXT[],
-    risks TEXT[],
-    stakeholders TEXT[],
+    rationale TEXT,
+    constraints JSONB,
+    risks JSONB,
+    tradeoffs TEXT,
+    stakeholders JSONB,
+    implementation_commits JSONB,
+    related_prs JSONB,
+    related_docs JSONB,
+    raw_analysis TEXT,
+    confidence_score NUMERIC DEFAULT 0.8,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(organization_id, decision_id)
 );
 
 -- Audit logs table
 CREATE TABLE audit_logs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-    action VARCHAR(100) NOT NULL,
-    resource_type VARCHAR(50),
-    resource_id VARCHAR(255),
+    organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+    action VARCHAR(255) NOT NULL,
+    resource VARCHAR(255),
     details JSONB,
-    ip_address VARCHAR(45),
-    user_agent TEXT,
+    ip_address INET,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -212,10 +225,12 @@ CREATE INDEX idx_code_org ON code_files(organization_id);
 CREATE INDEX idx_code_repo ON code_files(repository_id);
 CREATE INDEX idx_code_path ON code_files(file_path);
 CREATE INDEX idx_code_lang ON code_files(language);
+CREATE INDEX idx_code_type ON code_files(file_type);
 CREATE INDEX idx_code_org_lang ON code_files(organization_id, language);
 CREATE INDEX idx_code_functions_gin ON code_files USING GIN (functions);
 CREATE INDEX idx_code_classes_gin ON code_files USING GIN (classes);
 CREATE INDEX idx_code_path_trgm ON code_files USING GIN (file_path gin_trgm_ops);
+CREATE INDEX idx_code_search ON code_files USING GIN (to_tsvector('english', file_name || ' ' || COALESCE(content, '')));
 
 -- Pull requests indexes
 CREATE INDEX idx_pr_org ON pull_requests(organization_id);
@@ -248,13 +263,13 @@ VALUES
     ('529d2ca9-6fd1-4fee-9105-dbde1499f937', 'Acme Corp', 'enterprise', -1, 0),
     ('19cf9fd1-71b0-4401-a325-a971d19b79e7', 'Demo Organization', 'pro', 10000, 0);
 
--- Create Users (password hashes are for: demo123, admin123, user123)
--- Note: These are bcrypt hashes, you may need to regenerate them
+-- Create Users with correct bcrypt hashes
+-- Passwords: admin123, user123, demo123
 INSERT INTO users (email, password_hash, name, role, organization_id)
 VALUES
-    ('admin@acmecorp.com', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5lW7nJfK5F5aq', 'John Admin', 'admin', '529d2ca9-6fd1-4fee-9105-dbde1499f937'),
-    ('user@acmecorp.com', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5lW7nJfK5F5aq', 'Jane User', 'user', '529d2ca9-6fd1-4fee-9105-dbde1499f937'),
-    ('demo@example.com', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5lW7nJfK5F5aq', 'Demo User', 'user', '19cf9fd1-71b0-4401-a325-a971d19b79e7');
+    ('admin@acmecorp.com', '$2b$12$x.W9VSHT3v1uxxrXzuW3Iuh3ZH9okk.OjSD2FQ7lqm01FNGqRwCfS', 'John Admin', 'admin', '529d2ca9-6fd1-4fee-9105-dbde1499f937'),
+    ('user@acmecorp.com', '$2b$12$NucVECd5u3BsNTqKyyL48.nhaJrOHIeoYj61hgREsBUByJdA9VHSy', 'Jane User', 'user', '529d2ca9-6fd1-4fee-9105-dbde1499f937'),
+    ('demo@example.com', '$2b$12$1yR/i9wj9747y1ATm1lf5.zyCAyLTyryRCLrji0/mtCGq.2rQHiX.', 'Demo User', 'user', '19cf9fd1-71b0-4401-a325-a971d19b79e7');
 
 -- ============================================================
 -- SEED DATA - Repositories
