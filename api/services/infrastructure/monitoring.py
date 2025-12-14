@@ -4,8 +4,8 @@ import os
 import json
 from typing import Dict, List
 from datetime import datetime, timedelta
-from .redis_service import redis_service
-from .database import db_service
+from services.infrastructure.redis_service import redis_service
+from services.infrastructure.database import db_service
 
 class MonitoringService:
     def __init__(self):

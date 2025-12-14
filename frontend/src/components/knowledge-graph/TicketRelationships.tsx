@@ -21,8 +21,16 @@ export default function TicketRelationships() {
     setError(null)
 
     try {
-      const response = await knowledgeGraphApi.getTicketRelationships(ticketKey.trim())
-      setData(response)
+      const response: any = await knowledgeGraphApi.getTicketRelationships(ticketKey.trim())
+      // Handle nested relationships structure from API
+      const relationshipData = response.relationships || response
+      setData({
+        ticket_key: response.ticket_key || ticketKey.trim(),
+        commits: relationshipData.commits || [],
+        pull_requests: relationshipData.pull_requests || [],
+        code_files: relationshipData.code_files || [],
+        developers: relationshipData.developers || []
+      })
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to load ticket relationships')
       setData(null)
@@ -121,17 +129,17 @@ export default function TicketRelationships() {
                   💾 Commits ({data.commits.length})
                 </h3>
                 <div className="space-y-3 max-h-96 overflow-y-auto">
-                  {data.commits.map((commit, idx) => (
+                  {data.commits.map((commit: any, idx) => (
                     <div key={idx} className="border-l-4 border-purple-500 pl-3 py-2">
                       <div className="text-sm font-medium text-gray-900 truncate">
                         {commit.message}
                       </div>
                       <div className="text-xs text-gray-600 mt-1">
-                        {commit.author} • {new Date(commit.date).toLocaleDateString()}
+                        {commit.author_name || commit.author} • {new Date(commit.commit_date || commit.date).toLocaleDateString()}
                       </div>
-                      {commit.commit_hash && (
+                      {(commit.sha || commit.commit_hash) && (
                         <div className="text-xs text-gray-500 font-mono mt-1">
-                          {commit.commit_hash.substring(0, 8)}
+                          {(commit.sha || commit.commit_hash).substring(0, 8)}
                         </div>
                       )}
                     </div>
@@ -147,7 +155,7 @@ export default function TicketRelationships() {
                   🔀 Pull Requests ({data.pull_requests.length})
                 </h3>
                 <div className="space-y-3 max-h-96 overflow-y-auto">
-                  {data.pull_requests.map((pr, idx) => (
+                  {data.pull_requests.map((pr: any, idx) => (
                     <div key={idx} className="border-l-4 border-green-500 pl-3 py-2">
                       <div className="text-sm font-medium text-gray-900">
                         #{pr.pr_number}: {pr.title}
@@ -171,7 +179,7 @@ export default function TicketRelationships() {
                   📝 Code Files ({data.code_files.length})
                 </h3>
                 <div className="space-y-2 max-h-96 overflow-y-auto">
-                  {data.code_files.map((file, idx) => (
+                  {data.code_files.map((file: any, idx) => (
                     <div key={idx} className="border-l-4 border-orange-500 pl-3 py-2">
                       <div className="text-sm font-medium text-gray-900 font-mono truncate">
                         {file.file_path}
@@ -192,12 +200,12 @@ export default function TicketRelationships() {
                   👨‍💻 Developers ({data.developers.length})
                 </h3>
                 <div className="space-y-2 max-h-96 overflow-y-auto">
-                  {data.developers.map((dev, idx) => (
+                  {data.developers.map((dev: any, idx) => (
                     <div key={idx} className="border-l-4 border-blue-500 pl-3 py-2">
                       <div className="text-sm font-medium text-gray-900">{dev.name}</div>
                       <div className="text-xs text-gray-600 mt-1">{dev.email}</div>
                       <div className="text-xs text-gray-500 mt-1">
-                        {dev.commits_count} commits
+                        {dev.commit_count || dev.commits_count || 0} commits
                       </div>
                     </div>
                   ))}

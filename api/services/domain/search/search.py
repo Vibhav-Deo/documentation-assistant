@@ -1,7 +1,7 @@
 import re
 from typing import List
 from config import COLLECTION_NAME
-from .encryption import encryption_service
+from services.infrastructure.encryption import encryption_service
 
 def extract_keywords(text: str) -> List[str]:
     """Extract keywords from text for hybrid search"""

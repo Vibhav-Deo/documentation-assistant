@@ -212,6 +212,92 @@ class DatabaseService:
                 CREATE INDEX IF NOT EXISTS idx_prs_number ON pull_requests(pr_number);
                 CREATE INDEX IF NOT EXISTS idx_prs_tickets ON pull_requests USING gin(ticket_references);
                 CREATE INDEX IF NOT EXISTS idx_prs_search ON pull_requests USING gin(to_tsvector('english', title || ' ' || COALESCE(description, '')));
+
+                -- Enhanced decisions table
+                CREATE TABLE IF NOT EXISTS enhanced_decisions (
+                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                    organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+                    decision_id VARCHAR(255) NOT NULL,
+                    ticket_key VARCHAR(50),
+                    decision_summary JSONB,
+                    problem_statement JSONB,
+                    chosen_approach JSONB,
+                    alternatives_considered JSONB,
+                    constraints JSONB,
+                    risks JSONB,
+                    conflicts_detected JSONB,
+                    stakeholders TEXT[],
+                    overall_confidence FLOAT,
+                    implementation_commits TEXT[],
+                    related_prs TEXT[],
+                    related_docs TEXT[],
+                    raw_analysis TEXT,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(organization_id, decision_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_enhanced_decisions_org ON enhanced_decisions(organization_id);
+                CREATE INDEX IF NOT EXISTS idx_enhanced_decisions_ticket ON enhanced_decisions(ticket_key);
+                CREATE INDEX IF NOT EXISTS idx_enhanced_decisions_confidence ON enhanced_decisions(overall_confidence);
+                CREATE INDEX IF NOT EXISTS idx_enhanced_decisions_search ON enhanced_decisions USING gin(
+                    to_tsvector('english', 
+                        COALESCE((decision_summary->>'content'), '') || ' ' ||
+                        COALESCE((problem_statement->>'content'), '') || ' ' ||
+                        COALESCE((chosen_approach->>'content'), '')
+                    )
+                );
+
+                -- Legacy decisions table for backward compatibility
+                CREATE TABLE IF NOT EXISTS decisions (
+                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                    organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+                    decision_id VARCHAR(255) NOT NULL,
+                    ticket_key VARCHAR(50),
+                    decision_summary TEXT,
+                    problem_statement TEXT,
+                    alternatives_considered JSONB,
+                    chosen_approach TEXT,
+                    rationale TEXT,
+                    constraints JSONB,
+                    risks JSONB,
+                    tradeoffs TEXT,
+                    stakeholders JSONB,
+                    implementation_commits JSONB,
+                    related_prs JSONB,
+                    related_docs JSONB,
+                    raw_analysis TEXT,
+                    confidence_score FLOAT DEFAULT 0.8,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(organization_id, decision_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_decisions_org ON decisions(organization_id);
+                CREATE INDEX IF NOT EXISTS idx_decisions_ticket ON decisions(ticket_key);
+                CREATE INDEX IF NOT EXISTS idx_decisions_search ON decisions USING gin(
+                    to_tsvector('english', 
+                        COALESCE(decision_summary, '') || ' ' ||
+                        COALESCE(problem_statement, '') || ' ' ||
+                        COALESCE(chosen_approach, '')
+                    )
+                );
+
+                -- Auto-tagging feedback table
+                CREATE TABLE IF NOT EXISTS tagging_feedback (
+                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                    organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+                    item_id VARCHAR(255) NOT NULL,
+                    item_type VARCHAR(50) NOT NULL,
+                    suggested_tags TEXT[],
+                    accepted_tags TEXT[],
+                    user_id UUID REFERENCES users(id),
+                    created_at TIMESTAMP DEFAULT NOW()
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_tagging_feedback_org ON tagging_feedback(organization_id);
+                CREATE INDEX IF NOT EXISTS idx_tagging_feedback_item ON tagging_feedback(item_id, item_type);
+                CREATE INDEX IF NOT EXISTS idx_tagging_feedback_created ON tagging_feedback(created_at);
             """)
     
     async def create_organization(self, name: str, plan: str = "free") -> Dict:
@@ -982,6 +1068,139 @@ class DatabaseService:
                 ORDER BY created_at DESC
                 LIMIT $2
             """, org_id, limit)
+            return [dict(row) for row in rows]
+
+    # ========================================================================
+    # ENHANCED INTENT ANALYZER: Enhanced Decision Storage Methods
+    # ========================================================================
+
+    async def store_enhanced_decision(self, decision_data: Dict) -> Dict:
+        """Store an enhanced decision analysis in the database."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                INSERT INTO enhanced_decisions (
+                    organization_id, decision_id, ticket_key, decision_summary,
+                    problem_statement, chosen_approach, alternatives_considered,
+                    constraints, risks, conflicts_detected, stakeholders,
+                    overall_confidence, implementation_commits, related_prs,
+                    related_docs, raw_analysis
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+                )
+                ON CONFLICT (organization_id, decision_id)
+                DO UPDATE SET
+                    decision_summary = EXCLUDED.decision_summary,
+                    problem_statement = EXCLUDED.problem_statement,
+                    chosen_approach = EXCLUDED.chosen_approach,
+                    alternatives_considered = EXCLUDED.alternatives_considered,
+                    constraints = EXCLUDED.constraints,
+                    risks = EXCLUDED.risks,
+                    conflicts_detected = EXCLUDED.conflicts_detected,
+                    stakeholders = EXCLUDED.stakeholders,
+                    overall_confidence = EXCLUDED.overall_confidence,
+                    implementation_commits = EXCLUDED.implementation_commits,
+                    related_prs = EXCLUDED.related_prs,
+                    related_docs = EXCLUDED.related_docs,
+                    raw_analysis = EXCLUDED.raw_analysis,
+                    updated_at = NOW()
+                RETURNING *
+            """,
+                decision_data.get('organization_id'),
+                decision_data.get('decision_id'),
+                decision_data.get('ticket_key'),
+                json.dumps(decision_data.get('decision_summary')),
+                json.dumps(decision_data.get('problem_statement')),
+                json.dumps(decision_data.get('chosen_approach')),
+                json.dumps(decision_data.get('alternatives_considered', [])),
+                json.dumps(decision_data.get('constraints', [])),
+                json.dumps(decision_data.get('risks', [])),
+                json.dumps(decision_data.get('conflicts_detected', [])),
+                decision_data.get('stakeholders', []),
+                decision_data.get('overall_confidence', 0.5),
+                decision_data.get('implementation_commits', []),
+                decision_data.get('related_prs', []),
+                decision_data.get('related_docs', []),
+                decision_data.get('raw_analysis', '')
+            )
+            return dict(row)
+
+    async def get_enhanced_decision(self, decision_id: str, org_id: str) -> Optional[Dict]:
+        """Get an enhanced decision by its ID."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT * FROM enhanced_decisions
+                WHERE organization_id = $1 AND decision_id = $2
+            """, org_id, decision_id)
+            return dict(row) if row else None
+
+    async def search_enhanced_decisions(
+        self, 
+        query: str, 
+        org_id: str, 
+        confidence_threshold: float = 0.5,
+        limit: int = 10
+    ) -> List[Dict]:
+        """Search enhanced decisions using full-text search with confidence filtering."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT *,
+                    ts_rank(
+                        to_tsvector('english', 
+                            COALESCE((decision_summary->>'content'), '') || ' ' ||
+                            COALESCE((problem_statement->>'content'), '') || ' ' ||
+                            COALESCE((chosen_approach->>'content'), '')
+                        ), 
+                        plainto_tsquery('english', $2)
+                    ) as rank
+                FROM enhanced_decisions
+                WHERE organization_id = $1
+                AND overall_confidence >= $3
+                AND (
+                    to_tsvector('english', 
+                        COALESCE((decision_summary->>'content'), '') || ' ' ||
+                        COALESCE((problem_statement->>'content'), '') || ' ' ||
+                        COALESCE((chosen_approach->>'content'), '')
+                    ) @@ plainto_tsquery('english', $2)
+                )
+                ORDER BY rank DESC, overall_confidence DESC, created_at DESC
+                LIMIT $4
+            """, org_id, query, confidence_threshold, limit)
+            return [dict(row) for row in rows]
+
+    async def get_decisions_with_conflicts(self, org_id: str) -> List[Dict]:
+        """Get all enhanced decisions that have detected conflicts."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT * FROM enhanced_decisions
+                WHERE organization_id = $1
+                AND jsonb_array_length(conflicts_detected) > 0
+                ORDER BY created_at DESC
+            """, org_id)
+            return [dict(row) for row in rows]
+
+    async def get_enhanced_decisions_by_ticket(self, ticket_key: str, org_id: str) -> List[Dict]:
+        """Get all enhanced decisions related to a specific ticket."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT * FROM enhanced_decisions
+                WHERE organization_id = $1 AND ticket_key = $2
+                ORDER BY created_at DESC
+            """, org_id, ticket_key)
+            return [dict(row) for row in rows]
+
+    async def get_low_confidence_decisions(
+        self, 
+        org_id: str, 
+        confidence_threshold: float = 0.6
+    ) -> List[Dict]:
+        """Get decisions with confidence below threshold."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT * FROM enhanced_decisions
+                WHERE organization_id = $1
+                AND overall_confidence < $2
+                ORDER BY overall_confidence ASC, created_at DESC
+            """, org_id, confidence_threshold)
             return [dict(row) for row in rows]
 
 # Global database service

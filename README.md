@@ -5,18 +5,23 @@ A production-ready Retrieval-Augmented Generation (RAG) system with enterprise a
 ## 🚀 Features
 
 ### Core Features
-- 🔍 **Dynamic Document Indexing**: Sync Confluence spaces or public URLs
-- 🤖 **AI-Powered Q&A**: Multi-model support with conversation memory
-- ⚡ **Smart Search**: Semantic, keyword, and hybrid search modes
-- 📊 **Real-time Analytics**: Usage metrics and performance insights
+- 🔍 **Dynamic Document Indexing**: Sync Confluence spaces, Jira tickets, Git repositories, and public URLs
+- 🤖 **AI-Powered Q&A**: Multi-model support with conversation memory and streaming responses
+- ⚡ **Smart Search**: Semantic, keyword, and hybrid search across all data sources
+- 📊 **Real-time Analytics**: Usage metrics, performance insights, and predictive analytics
 - 🔒 **Enterprise Security**: JWT authentication, data encryption, RBAC
+- 🎯 **Decision Intelligence**: Automated decision extraction and conflict detection
+- 📈 **Predictive Analytics**: Ticket completion forecasting and code hotspot detection
+- 🏷️ **Auto-Tagging**: ML-powered classification for tickets, commits, and documents
 
 ### Enterprise Features
 - 👥 **Multi-Tenancy**: Complete data isolation between organizations
 - 🏢 **User Management**: Admin/User roles with quota management
 - 📈 **Organization Analytics**: Usage tracking and user metrics
 - 🔐 **Authentication**: Email/password + OAuth (Google/Microsoft)
-- 💾 **Production Stack**: PostgreSQL, Redis, monitoring with Prometheus/Grafana
+- 💾 **Production Stack**: PostgreSQL, Redis, Qdrant, monitoring with Prometheus/Grafana
+- 🔄 **Real-time Streaming**: Server-Sent Events for live AI responses
+- 🧠 **Knowledge Graph**: Relationship mapping between tickets, commits, and code
 
 ## 🎨 User Interface
 
@@ -97,21 +102,46 @@ Automatically created on first startup:
 - Admins can view organization metrics and manage users
 - Users can ask questions within their quota limits
 
-### 2. Document Syncing (Optional)
-- **Confluence**: Enter base URL, username, and API token
-- **Public URLs**: Enter any public documentation URL
-- Documents are isolated per organization
+### 2. Data Source Integration
+- **Confluence**: Sync documentation spaces with base URL, username, and API token
+- **Jira**: Import tickets, issues, and project data
+- **Git Repositories**: Sync commits, pull requests, and code files from GitHub/GitLab
+- **Public URLs**: Index any public documentation URL
+- **Auto-Processing**: Automatic relationship detection between tickets, commits, and code
+- All data is isolated per organization with full multi-tenancy
 
 ### 3. AI Chat Interface
-- Ask questions with or without synced documents
+- Ask questions with comprehensive search across all data sources
 - Choose from multiple AI models (Mistral, Llama2, CodeLlama)
 - Select search type: Semantic, Keyword, or Hybrid
-- Conversation memory maintains context
+- **Real-time Streaming**: Enable streaming for live AI responses
+- **Context-Aware**: Searches Jira tickets, commits, code files, and documentation
+- Conversation memory maintains context across sessions
+- Source attribution shows where answers come from
 
-### 4. Admin Features
+### 4. Advanced Features
+
+#### Predictive Analytics
+- **Ticket Forecasting**: Predict completion dates based on historical data
+- **Code Hotspots**: Identify files and components with high change frequency
+- **Resource Bottlenecks**: Detect potential development bottlenecks
+
+#### Decision Intelligence
+- **Automatic Extraction**: AI extracts decisions from tickets and documents
+- **Conflict Detection**: Identifies contradictory decisions across sources
+- **Decision Search**: Full-text search through organizational decisions
+
+#### Auto-Tagging & Classification
+- **Smart Tagging**: ML-powered tagging for tickets and commits
+- **Topic Extraction**: Automatic topic identification in documents
+- **Feedback Loop**: Continuous improvement through user feedback
+
+### 5. Admin Features
 - View organization users and their usage
 - Monitor API request metrics and quotas
 - Access system health and performance data
+- Manage predictive analytics models
+- Review decision extraction accuracy
 
 ## 🔧 API Reference
 
@@ -134,7 +164,9 @@ POST /auth/login
 }
 ```
 
-### Document Sync (Authenticated)
+### Data Source Sync (Authenticated)
+
+#### Confluence Sync
 ```bash
 POST /sync
 Authorization: Bearer <token>
@@ -147,20 +179,81 @@ Authorization: Bearer <token>
 }
 ```
 
+#### Jira Sync
+```bash
+POST /sync/jira
+Authorization: Bearer <token>
+{
+  "server": "https://company.atlassian.net",
+  "email": "user@company.com",
+  "api_token": "your_jira_token",
+  "project_key": "PROJ"
+}
+```
+
+#### Git Repository Sync
+```bash
+POST /sync/repository
+Authorization: Bearer <token>
+{
+  "provider": "github",
+  "repo_url": "https://github.com/company/repo",
+  "access_token": "your_github_token",
+  "branch": "main"
+}
+```
+
 ### AI Chat (Authenticated)
 ```bash
-POST /ask
+# Regular chat
+POST /search/ask
 Authorization: Bearer <token>
 {
   "question": "How do I deploy the application?",
   "model": "mistral",
   "max_results": 5,
-  "search_type": "hybrid",
-  "session_id": "optional_session_id"
+  "search_type": "semantic",
+  "session_id": "optional_session_id",
+  "stream": false
+}
+
+# Streaming chat with real-time responses
+POST /search/ask
+Authorization: Bearer <token>
+{
+  "question": "Explain the authentication flow",
+  "model": "mistral",
+  "max_results": 5,
+  "search_type": "semantic",
+  "session_id": "optional_session_id",
+  "stream": true
 }
 ```
 
-### Admin Endpoints
+### New API Endpoints
+
+#### Predictive Analytics
+- `POST /predict/ticket-completion` - Predict ticket completion dates
+- `GET /predict/hotspots` - Identify code hotspots and risk areas
+- `GET /predict/bottlenecks` - Detect resource bottlenecks
+
+#### Auto-Tagging
+- `POST /auto-tag/ticket` - Automatically tag Jira tickets
+- `POST /auto-tag/commit` - Classify commit types
+- `POST /auto-tag/document` - Extract document topics
+
+#### Enhanced AI
+- `POST /ai/generate` - Multi-model AI generation with fallback
+- `POST /ai/few-shot` - Few-shot learning responses
+- `POST /ai/chain-of-thought` - Chain-of-thought reasoning
+- `GET /ai/models` - List available AI models
+
+#### Decision Intelligence
+- `POST /decisions/extract` - Extract decisions from text
+- `GET /decisions/conflicts` - Detect decision conflicts
+- `GET /decisions/search` - Search stored decisions
+
+#### Admin Endpoints
 - `GET /monitoring/organization` - Organization metrics (Admin only)
 - `GET /monitoring/requests` - Request analytics (Admin only)
 - `GET /monitoring/alerts` - System alerts (Admin only)
@@ -206,13 +299,14 @@ MICROSOFT_CLIENT_SECRET=your_microsoft_client_secret
 ## 🏗️ Architecture
 
 ### Services
-- **API**: FastAPI backend with JWT authentication
-- **UI**: Streamlit frontend with modern chat interface
-- **Database**: PostgreSQL for user data and audit logs
+- **API**: FastAPI backend with modular architecture and JWT authentication
+- **Frontend**: Next.js React application with TypeScript and Tailwind CSS
+- **Database**: PostgreSQL for user data, audit logs, and structured data
 - **Cache**: Redis for session and query caching
-- **Vector DB**: Qdrant for document embeddings
-- **Monitoring**: Prometheus + Grafana for metrics
-- **AI**: Ollama for local LLM inference
+- **Vector DB**: Qdrant for semantic search and document embeddings
+- **Monitoring**: Prometheus + Grafana for comprehensive metrics
+- **AI**: Ollama for local LLM inference with multi-model support
+- **Legacy UI**: Streamlit interface (deprecated, use React frontend)
 
 ### Security Features
 - ✅ JWT-based authentication with role-based access

@@ -1,8 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { impactApi } from '@/lib/api/impact'
+import { predictionsApi } from '@/lib/api/predictions'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 
 export default function ImpactPage() {
@@ -74,14 +75,17 @@ function FileImpact() {
   const [filePath, setFilePath] = useState('')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<any>(null)
+  const [error, setError] = useState<string>('')
 
   const analyze = async () => {
     if (!filePath) return
     try {
       setLoading(true)
+      setError('')
       const data = await impactApi.analyzeFile(filePath)
       setResult(data)
-    } catch (error) {
+    } catch (error: any) {
+      setError(error?.message || 'Failed to analyze file')
       console.error('Failed to analyze:', error)
     } finally {
       setLoading(false)
@@ -89,29 +93,37 @@ function FileImpact() {
   }
 
   return (
-    <div>
-      <h2 className="text-xl font-semibold text-gray-900 mb-4">File Impact Analysis</h2>
-      <p className="text-gray-600 mb-6">Analyze what would be affected if you change a specific file</p>
+    <div className="space-y-8">
+      <div>
+        <h2 className="text-xl font-semibold text-gray-900 mb-4">File Impact Analysis</h2>
+        <p className="text-gray-600 mb-6">Analyze what would be affected if you change a specific file</p>
 
-      <div className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">File Path</label>
-          <input
-            type="text"
-            value={filePath}
-            onChange={(e) => setFilePath(e.target.value)}
-            placeholder="e.g., src/auth/oauth.ts"
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-          />
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">File Path</label>
+            <input
+              type="text"
+              value={filePath}
+              onChange={(e) => setFilePath(e.target.value)}
+              placeholder="e.g., src/auth/oauth.ts"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+            />
+          </div>
+
+          <button
+            onClick={analyze}
+            disabled={!filePath || loading}
+            className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? 'Analyzing...' : '🔍 Analyze Impact'}
+          </button>
         </div>
 
-        <button
-          onClick={analyze}
-          disabled={!filePath || loading}
-          className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {loading ? 'Analyzing...' : '🔍 Analyze Impact'}
-        </button>
+        {error && (
+          <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
+            {error}
+          </div>
+        )}
       </div>
 
       {result && (
@@ -156,17 +168,37 @@ function TicketImpact() {
   const [ticketKey, setTicketKey] = useState('')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<any>(null)
+  const [error, setError] = useState<string>('')
+  const [riskAssessment, setRiskAssessment] = useState<any>(null)
+  const [riskLoading, setRiskLoading] = useState(false)
 
   const analyze = async () => {
     if (!ticketKey) return
     try {
       setLoading(true)
+      setError('')
       const data = await impactApi.analyzeTicket(ticketKey)
       setResult(data)
-    } catch (error) {
+      
+      // Also load risk assessment
+      loadRiskAssessment(ticketKey)
+    } catch (error: any) {
+      setError(error?.message || 'Failed to analyze ticket')
       console.error('Failed to analyze:', error)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadRiskAssessment = async (key: string) => {
+    try {
+      setRiskLoading(true)
+      const risk = await predictionsApi.assessTicketRisk({ ticket_key: key })
+      setRiskAssessment(risk)
+    } catch (error) {
+      console.error('Failed to load risk:', error)
+    } finally {
+      setRiskLoading(false)
     }
   }
 
@@ -194,6 +226,12 @@ function TicketImpact() {
         >
           {loading ? 'Analyzing...' : '🔍 Analyze Impact'}
         </button>
+
+        {error && (
+          <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
+            {error}
+          </div>
+        )}
       </div>
 
       {result && (
@@ -202,6 +240,47 @@ function TicketImpact() {
             <div className="font-medium text-blue-900">{result.ticket_key}</div>
             <div className="text-sm text-blue-700 mt-1">{result.summary}</div>
           </div>
+
+          {/* Risk Assessment Panel */}
+          {riskAssessment && (
+            <div className={`p-4 rounded-lg border ${
+              riskAssessment.risk_level === 'High' ? 'bg-red-50 border-red-300' :
+              riskAssessment.risk_level === 'Medium' ? 'bg-yellow-50 border-yellow-300' :
+              'bg-green-50 border-green-300'
+            }`}>
+              <div className="flex items-start gap-3">
+                <div className="text-2xl">
+                  {riskAssessment.risk_level === 'High' ? '🔴' :
+                   riskAssessment.risk_level === 'Medium' ? '🟡' : '🟢'}
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-medium text-gray-900 mb-2">
+                    Risk Assessment: {riskAssessment.risk_score}/100 ({riskAssessment.risk_level})
+                  </h3>
+                  {riskAssessment.risk_factors && riskAssessment.risk_factors.length > 0 && (
+                    <div className="mb-3">
+                      <div className="text-sm font-medium text-gray-700 mb-1">Risk Factors:</div>
+                      <ul className="text-sm text-gray-600 space-y-1">
+                        {riskAssessment.risk_factors.map((factor: string, i: number) => (
+                          <li key={i}>• {factor}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {riskAssessment.mitigation_suggestions && riskAssessment.mitigation_suggestions.length > 0 && (
+                    <div>
+                      <div className="text-sm font-medium text-gray-700 mb-1">Mitigation Suggestions:</div>
+                      <ul className="text-sm text-gray-600 space-y-1">
+                        {riskAssessment.mitigation_suggestions.map((suggestion: string, i: number) => (
+                          <li key={i}>• {suggestion}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-4 gap-4">
             <div className="bg-gray-50 rounded p-4">
@@ -241,14 +320,17 @@ function CommitImpact() {
   const [sha, setSha] = useState('')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<any>(null)
+  const [error, setError] = useState<string>('')
 
   const analyze = async () => {
     if (!sha) return
     try {
       setLoading(true)
+      setError('')
       const data = await impactApi.analyzeCommit(sha)
       setResult(data)
-    } catch (error) {
+    } catch (error: any) {
+      setError(error?.message || 'Failed to analyze commit')
       console.error('Failed to analyze:', error)
     } finally {
       setLoading(false)
@@ -279,6 +361,12 @@ function CommitImpact() {
         >
           {loading ? 'Analyzing...' : '🔍 Analyze Impact'}
         </button>
+
+        {error && (
+          <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
+            {error}
+          </div>
+        )}
       </div>
 
       {result && (
@@ -323,6 +411,7 @@ function ReviewerSuggestions() {
   const [files, setFiles] = useState(['', ''])
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<any>(null)
+  const [error, setError] = useState<string>('')
 
   const suggest = async () => {
     const validFiles = files.filter(f => f.trim())
@@ -330,9 +419,11 @@ function ReviewerSuggestions() {
 
     try {
       setLoading(true)
+      setError('')
       const data = await impactApi.suggestReviewers(validFiles)
       setResult(data)
-    } catch (error) {
+    } catch (error: any) {
+      setError(error?.message || 'Failed to suggest reviewers')
       console.error('Failed to suggest:', error)
     } finally {
       setLoading(false)
@@ -376,6 +467,12 @@ function ReviewerSuggestions() {
         >
           {loading ? 'Finding reviewers...' : '👥 Suggest Reviewers'}
         </button>
+
+        {error && (
+          <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
+            {error}
+          </div>
+        )}
       </div>
 
       {result && (

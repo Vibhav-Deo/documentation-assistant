@@ -9,8 +9,8 @@ from qdrant_client.models import PointStruct
 from uuid import uuid4
 from datetime import datetime
 from config import COLLECTION_NAME
-from .encryption import encryption_service
-from .search import extract_keywords
+from services.infrastructure.encryption import encryption_service
+from services.domain.search.search import extract_keywords
 
 def clean_html(html: str) -> str:
     return BeautifulSoup(html, "html.parser").get_text(separator="\n")

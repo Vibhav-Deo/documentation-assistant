@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useEffect } from 'react'
 import ReactFlow, {
   Node,
   Edge,
@@ -41,11 +41,12 @@ export default function RelationshipGraph({ data, ticketKey }: RelationshipGraph
     })
 
     // Add commit nodes
-    data.commits?.forEach((commit, idx) => {
+    data.commits?.forEach((commit: any, idx) => {
       const nodeId = `commit-${idx}`
+      const message = commit.message || ''
       nodes.push({
         id: nodeId,
-        data: { label: `💾 ${commit.message.substring(0, 30)}...` },
+        data: { label: `💾 ${message.substring(0, 30)}...` },
         position: { x: 100, y: 50 + idx * 80 },
         style: {
           background: '#a855f7',
@@ -89,11 +90,12 @@ export default function RelationshipGraph({ data, ticketKey }: RelationshipGraph
     })
 
     // Add developer nodes
-    data.developers?.forEach((dev, idx) => {
+    data.developers?.forEach((dev: any, idx) => {
       const nodeId = `dev-${idx}`
+      const devName = dev.name || dev.email || 'Unknown'
       nodes.push({
         id: nodeId,
-        data: { label: `👨‍💻 ${dev.name}` },
+        data: { label: `👨‍💻 ${devName}` },
         position: { x: 250 + idx * 150, y: 400 },
         style: {
           background: '#3b82f6',
@@ -112,9 +114,10 @@ export default function RelationshipGraph({ data, ticketKey }: RelationshipGraph
     })
 
     // Add file nodes (limit to first 5 for readability)
-    data.code_files?.slice(0, 5).forEach((file, idx) => {
+    data.code_files?.slice(0, 5).forEach((file: any, idx) => {
       const nodeId = `file-${idx}`
-      const fileName = file.file_path.split('/').pop() || file.file_path
+      const filePath = file.file_path || file.path || 'unknown'
+      const fileName = filePath.split('/').pop() || filePath
       nodes.push({
         id: nodeId,
         data: { label: `📝 ${fileName}` },
@@ -138,8 +141,14 @@ export default function RelationshipGraph({ data, ticketKey }: RelationshipGraph
     return { initialNodes: nodes, initialEdges: edges }
   }, [data, ticketKey])
 
-  const [nodes, , onNodesChange] = useNodesState(initialNodes)
-  const [edges, , onEdgesChange] = useEdgesState(initialEdges)
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
+
+  // Update nodes and edges when data changes
+  useEffect(() => {
+    setNodes(initialNodes)
+    setEdges(initialEdges)
+  }, [initialNodes, initialEdges, setNodes, setEdges])
 
   return (
     <div style={{ height: '600px' }} className="border border-gray-200 rounded-lg">

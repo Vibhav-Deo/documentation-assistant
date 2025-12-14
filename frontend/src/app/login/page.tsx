@@ -14,7 +14,10 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (isAuthenticated) {
-      router.push('/chat')
+      // Check if there's a redirect URL in the query params
+      const urlParams = new URLSearchParams(window.location.search)
+      const redirectTo = urlParams.get('redirect') || '/demo' // Default to demo page
+      router.push(redirectTo)
     }
   }, [isAuthenticated, router])
 

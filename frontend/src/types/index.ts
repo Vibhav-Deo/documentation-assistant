@@ -48,12 +48,14 @@ export interface ChatRequest {
   include_jira?: boolean
   include_git?: boolean
   include_code?: boolean
+  stream?: boolean
 }
 
 export interface ChatResponse {
   answer: string
-  sources: string[]
-  session_id: string
+  sources: any[]
+  session_id?: string
+  query_metadata?: any
 }
 
 // Knowledge Graph Types

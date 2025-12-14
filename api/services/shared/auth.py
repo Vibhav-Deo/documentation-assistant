@@ -108,7 +108,7 @@ class AuthService:
         payload = self.verify_token(credentials.credentials)
         user_id = payload.get("user_id")
         
-        from services.database import db_service
+        from services.infrastructure.database import db_service
         user_data = await db_service.get_user_by_id(user_id)
         if not user_data:
             raise HTTPException(status_code=401, detail="User not found")

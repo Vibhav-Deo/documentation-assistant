@@ -50,9 +50,9 @@ export default function ChatMessage({ message }: ChatMessageProps) {
               📚 View {message.sources.length} sources
             </summary>
             <div className="mt-2 space-y-1">
-              {message.sources.map((source, idx) => (
+              {message.sources.map((source: any, idx: number) => (
                 <div key={idx} className="text-xs text-gray-700 pl-2">
-                  • {source}
+                  • {typeof source === 'string' ? source : source.title || source.type}
                 </div>
               ))}
             </div>
