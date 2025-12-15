@@ -497,4 +497,4 @@ MIT License - see LICENSE file for details.
 
 ---
 
-**Built with ❤️ using FastAPI, Streamlit, Ollama, and modern DevOps practices.**
+**Built with ❤️ using FastAPI, NextJs + React, Ollama, and modern DevOps practices.**
