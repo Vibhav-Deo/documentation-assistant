@@ -818,32 +818,32 @@ If any section cannot be determined, write "Not explicitly documented" and set c
     async def _store_enhanced_decision(self, decision: EnhancedDecision, org_id: str) -> None:
         """Store enhanced decision in database with full-text search support."""
         
-        # Convert to dictionary for storage
+        # Convert to dictionary with JSON strings for nested objects
         decision_data = {
             "decision_id": decision.decision_id,
             "ticket_key": decision.ticket_key,
-            "decision_summary": {
+            "decision_summary": json.dumps({
                 "content": decision.decision_summary.content,
                 "confidence_score": decision.decision_summary.confidence_score,
                 "confidence_level": decision.decision_summary.confidence_level.value,
                 "sources": decision.decision_summary.sources,
                 "reasoning": decision.decision_summary.reasoning
-            },
-            "problem_statement": {
+            }),
+            "problem_statement": json.dumps({
                 "content": decision.problem_statement.content,
                 "confidence_score": decision.problem_statement.confidence_score,
                 "confidence_level": decision.problem_statement.confidence_level.value,
                 "sources": decision.problem_statement.sources,
                 "reasoning": decision.problem_statement.reasoning
-            },
-            "chosen_approach": {
+            }),
+            "chosen_approach": json.dumps({
                 "content": decision.chosen_approach.content,
                 "confidence_score": decision.chosen_approach.confidence_score,
                 "confidence_level": decision.chosen_approach.confidence_level.value,
                 "sources": decision.chosen_approach.sources,
                 "reasoning": decision.chosen_approach.reasoning
-            },
-            "alternatives_considered": [
+            }),
+            "alternatives_considered": json.dumps([
                 {
                     "content": alt.content,
                     "confidence_score": alt.confidence_score,
@@ -851,8 +851,8 @@ If any section cannot be determined, write "Not explicitly documented" and set c
                     "sources": alt.sources,
                     "reasoning": alt.reasoning
                 } for alt in decision.alternatives_considered
-            ],
-            "constraints": [
+            ]),
+            "constraints": json.dumps([
                 {
                     "content": constraint.content,
                     "confidence_score": constraint.confidence_score,
@@ -860,8 +860,8 @@ If any section cannot be determined, write "Not explicitly documented" and set c
                     "sources": constraint.sources,
                     "reasoning": constraint.reasoning
                 } for constraint in decision.constraints
-            ],
-            "risks": [
+            ]),
+            "risks": json.dumps([
                 {
                     "content": risk.content,
                     "confidence_score": risk.confidence_score,
@@ -869,8 +869,8 @@ If any section cannot be determined, write "Not explicitly documented" and set c
                     "sources": risk.sources,
                     "reasoning": risk.reasoning
                 } for risk in decision.risks
-            ],
-            "conflicts_detected": [
+            ]),
+            "conflicts_detected": json.dumps([
                 {
                     "element_type": conflict.element_type,
                     "conflicting_sources": conflict.conflicting_sources,
@@ -878,13 +878,13 @@ If any section cannot be determined, write "Not explicitly documented" and set c
                     "severity": conflict.severity,
                     "resolution_suggestion": conflict.resolution_suggestion
                 } for conflict in decision.conflicts_detected
-            ],
+            ]),
             "stakeholders": decision.stakeholders,
             "overall_confidence": decision.overall_confidence,
             "implementation_commits": decision.implementation_commits,
             "related_prs": decision.related_prs,
             "related_docs": decision.related_docs,
-            "created_at": decision.created_at,
+            "created_at": datetime.now(),
             "raw_analysis": decision.raw_analysis
         }
 

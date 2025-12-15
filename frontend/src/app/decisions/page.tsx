@@ -26,8 +26,8 @@ export default function DecisionsPage() {
     setDecision(null)
 
     try {
-      const response = await decisionsApi.analyzeTicket(ticketKey.trim())
-      setDecision(response.decision)
+      const response: any = await decisionsApi.analyzeTicket(ticketKey.trim())
+      setDecision(response.enhanced_decision || response.decision)
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to analyze decision')
     } finally {
@@ -109,28 +109,36 @@ export default function DecisionsPage() {
               </div>
             )}
 
-            {decision && (
-              <div className="mt-6 space-y-4">
-                <div>
-                  <h3 className="font-semibold text-gray-900 mb-2">Decision Summary</h3>
-                  <p className="text-gray-700">{decision.decision_summary}</p>
-                </div>
-                <div>
-                  <h3 className="font-semibold text-gray-900 mb-2">Rationale</h3>
-                  <p className="text-gray-700 whitespace-pre-wrap">{decision.rationale}</p>
-                </div>
-                {decision.alternatives_considered && decision.alternatives_considered.length > 0 && (
+            {decision && (() => {
+              const d = decision as any
+              const summary = typeof d.decision_summary === 'string' ? d.decision_summary : d.decision_summary?.content || 'N/A'
+              const problem = typeof d.problem_statement === 'string' ? d.problem_statement : d.problem_statement?.content || 'N/A'
+              const approach = typeof d.chosen_approach === 'string' ? d.chosen_approach : d.chosen_approach?.content || 'N/A'
+              const alternatives = typeof d.alternatives_considered === 'string' ? d.alternatives_considered : d.alternatives_considered?.content
+              
+              return (
+                <div className="mt-6 space-y-4">
                   <div>
-                    <h3 className="font-semibold text-gray-900 mb-2">Alternatives Considered</h3>
-                    <ul className="list-disc list-inside space-y-1">
-                      {decision.alternatives_considered.map((alt, idx) => (
-                        <li key={idx} className="text-gray-700">{alt}</li>
-                      ))}
-                    </ul>
+                    <h3 className="font-semibold text-gray-900 mb-2">Decision Summary</h3>
+                    <p className="text-gray-700">{summary}</p>
                   </div>
-                )}
-              </div>
-            )}
+                  <div>
+                    <h3 className="font-semibold text-gray-900 mb-2">Problem Statement</h3>
+                    <p className="text-gray-700 whitespace-pre-wrap">{problem}</p>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-gray-900 mb-2">Chosen Approach</h3>
+                    <p className="text-gray-700 whitespace-pre-wrap">{approach}</p>
+                  </div>
+                  {alternatives && (
+                    <div>
+                      <h3 className="font-semibold text-gray-900 mb-2">Alternatives Considered</h3>
+                      <p className="text-gray-700 whitespace-pre-wrap">{alternatives}</p>
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
           </div>
 
           {/* Search Decisions */}

@@ -18,10 +18,19 @@ export default function SystemHealth() {
     setError(null)
 
     try {
-      const [healthData, metricsData] = await Promise.all([
+      const [healthResponse, metricsResponse] = await Promise.all([
         adminApi.getSystemHealth(),
         adminApi.getSystemMetrics(),
       ])
+      // API returns data wrapped in {success, data: {...}} structure
+      const healthResponseData = (healthResponse as any).data || healthResponse
+      const metricsResponseData = (metricsResponse as any).data || metricsResponse
+      
+      // Health data is in legacy_monitoring, use that or the main data
+      const healthData = healthResponseData.legacy_monitoring || healthResponseData
+      // Metrics are in legacy_metrics nested object
+      const metricsData = metricsResponseData.legacy_metrics || metricsResponseData
+      
       setHealth(healthData)
       setMetrics(metricsData)
     } catch (err: any) {

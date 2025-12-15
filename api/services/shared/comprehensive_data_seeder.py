@@ -339,7 +339,18 @@ class ComprehensiveDataSeeder:
             updated_date = created_date + timedelta(days=random.randint(0, 30))
             resolved_date = updated_date + timedelta(days=random.randint(1, 20)) if ticket["status"] == "Done" else None
             
+            metadata_json = json.dumps({"complexity_factors": ticket["complexity"], "category": ticket["category"]})
+            
             async with self.db.pool.acquire() as conn:
+                # Check if ticket already exists
+                exists = await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM jira_tickets WHERE organization_id = $1 AND ticket_key = $2)",
+                    self.org_id, ticket["key"]
+                )
+                
+                if exists:
+                    continue
+                
                 await conn.execute("""
                     INSERT INTO jira_tickets (
                         organization_id, ticket_key, summary, description,
@@ -348,14 +359,13 @@ class ComprehensiveDataSeeder:
                         labels, components, metadata
                     )
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-                    ON CONFLICT (organization_id, ticket_key) DO NOTHING
                 """,
                     self.org_id, ticket["key"], ticket["summary"], ticket["description"],
                     "Story", ticket["status"], ticket["priority"],
                     assignee["name"], reporter["name"],
                     created_date, updated_date, resolved_date, ticket["story_points"],
                     [ticket["category"].lower()], [self.feature_categories[ticket["category"]]],
-                    {"complexity_factors": ticket["complexity"], "category": ticket["category"]}
+                    metadata_json
                 )
             
             tickets.append(ticket)
@@ -380,67 +390,82 @@ class ComprehensiveDataSeeder:
             
             repo_id = str(repo_row["id"])
         
-        # Generate commits for completed tickets (realistic development patterns)
-        completed_tickets = [t for t in tickets if t["status"] == "Done"]
+        # Seed specific commits that match the code files we'll create
+        predefined_commits = [
+            {
+                "sha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+                "message": "feat(auth): implement OAuth2 authorization flow\n\n- Add OAuth2 provider configuration for Google and GitHub\n- Implement authorization code flow\n- Add token exchange endpoints\n- Store encrypted tokens in database\n- Add refresh token mechanism\n\nBreaking change: New /oauth2/authorize endpoint replaces /login",
+                "author": self.developers[0],
+                "files": ["src/auth/oauth.ts", "src/auth/rbac.ts"],
+                "ticket": "AUTH-101",
+                "additions": 1245,
+                "deletions": 230
+            },
+            {
+                "sha": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
+                "message": "feat(auth): add RBAC system with role hierarchy\n\n- Implement role-based access control\n- Define roles: admin, developer, viewer\n- Add permission checking middleware\n- Create role assignment API endpoints\n\nImplements AUTH-101 RBAC requirements",
+                "author": self.developers[1],
+                "files": ["src/auth/rbac.ts", "src/api/predictions_controller.py"],
+                "ticket": "AUTH-101",
+                "additions": 856,
+                "deletions": 120
+            },
+            {
+                "sha": "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+                "message": "feat(auth): add JWT token management service\n\n- Implement JWT signing and verification\n- Add token refresh endpoint\n- Implement token rotation for security\n- Add rate limiting for token endpoints\n\nRelated to AUTH-101",
+                "author": self.developers[2],
+                "files": ["src/auth/jwt.ts"],
+                "ticket": "AUTH-101",
+                "additions": 432,
+                "deletions": 45
+            },
+            {
+                "sha": "g1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+                "message": "fix(auth): correct JWT expiration time calculation\n\nThe JWT tokens were expiring after 45 minutes instead of 8 hours\ndue to incorrect time unit conversion. Changed from seconds to hours.\n\nBefore: exp = now + timedelta(seconds=28800)\nAfter: exp = now + timedelta(hours=8)\n\nFixes AUTH-104",
+                "author": self.developers[3],
+                "files": ["src/auth/jwt.ts"],
+                "ticket": "AUTH-104",
+                "additions": 12,
+                "deletions": 8
+            },
+            {
+                "sha": "k5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6",
+                "message": "feat(db): add PostgreSQL schema migration scripts\n\n- Create Alembic migration setup\n- Add initial schema migration\n- Convert MySQL-specific queries to PostgreSQL\n- Update ORM models for PostgreSQL\n\nPart of DB-201 migration",
+                "author": self.developers[4],
+                "files": ["migrations/001_postgresql_schema.sql"],
+                "ticket": "DB-201",
+                "additions": 567,
+                "deletions": 234
+            }
+        ]
         
-        for ticket in completed_tickets:
-            # Generate 1-4 commits per completed ticket
-            num_commits = random.randint(1, 4)
+        for commit_data in predefined_commits:
+            commit_date = datetime.now() - timedelta(days=random.randint(1, 90))
             
-            for i in range(num_commits):
-                commit_types = ["feat", "fix", "refactor", "test", "docs"]
-                commit_type = random.choice(commit_types)
-                
-                # Generate realistic commit messages
-                if commit_type == "feat":
-                    message = f"feat({ticket['category'].lower()}): implement {ticket['summary'].lower()}"
-                elif commit_type == "fix":
-                    message = f"fix({ticket['category'].lower()}): resolve issue in {ticket['summary'].lower()}"
-                else:
-                    message = f"{commit_type}({ticket['category'].lower()}): update {ticket['summary'].lower()}"
-                
-                # Add detailed commit body
-                detailed_message = f"""{message}
-
-{ticket['description'][:200]}...
-
-- Implement core functionality
-- Add comprehensive tests
-- Update documentation
-- Handle edge cases
-
-Closes {ticket['key']}"""
-                
-                # Generate realistic file changes based on complexity
-                files_changed = self._generate_realistic_files(ticket)
-                
-                commit_date = datetime.now() - timedelta(days=random.randint(1, 90))
-                sha = f"{random.randint(100000, 999999):06x}{random.randint(100000, 999999):06x}"
-                
-                assignee_email = next(d["email"] for d in self.developers if d["name"] == ticket.get("assignee", "Unknown"))
-                
-                async with self.db.pool.acquire() as conn:
-                    await conn.execute("""
-                        INSERT INTO commits (
-                            organization_id, repository_id, sha, message,
-                            author_name, author_email, commit_date,
-                            files_changed, additions, deletions, ticket_references, metadata
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                        ON CONFLICT (repository_id, sha) DO NOTHING
-                    """,
-                        self.org_id, repo_id, sha, detailed_message,
-                        ticket.get("assignee", "Unknown"), assignee_email, commit_date,
-                        files_changed, random.randint(20, 300), random.randint(5, 100),
-                        [ticket["key"]], {"commit_type": commit_type, "category": ticket["category"]}
+            async with self.db.pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO commits (
+                        organization_id, repository_id, sha, message,
+                        author_name, author_email, commit_date,
+                        files_changed, additions, deletions, ticket_references, metadata
                     )
-                
-                commits.append({
-                    "sha": sha,
-                    "message": detailed_message,
-                    "ticket_key": ticket["key"],
-                    "category": ticket["category"]
-                })
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    ON CONFLICT (repository_id, sha) DO UPDATE SET
+                        files_changed = EXCLUDED.files_changed,
+                        ticket_references = EXCLUDED.ticket_references
+                """,
+                    self.org_id, repo_id, commit_data["sha"], commit_data["message"],
+                    commit_data["author"]["name"], commit_data["author"]["email"], commit_date,
+                    commit_data["files"], commit_data["additions"], commit_data["deletions"],
+                    [commit_data["ticket"]], json.dumps({"predefined": True})
+                )
+            
+            commits.append({
+                "sha": commit_data["sha"],
+                "message": commit_data["message"],
+                "ticket_key": commit_data["ticket"],
+                "files": commit_data["files"]
+            })
         
         return commits
 
@@ -531,6 +556,11 @@ Closes {ticket['key']}"""
         # Choose solution (usually a compromise)
         chosen = random.choice(alternatives)
         
+        # Create decision text with proper newline handling
+        newline = "\n"
+        alternatives_text = newline.join([f"### {alt['name']}\n**Pros:** {', '.join(alt['pros'])}\n**Cons:** {', '.join(alt['cons'])}\n**Effort:** {alt['effort']}" for alt in alternatives])
+        stakeholders_text = newline.join([f"**{s['name']}:** {s['reasoning']}\n*Concerns:* {', '.join(s['concerns'])}" for s in stakeholders])
+        
         decision_text = f"""
 # Decision: {ticket['summary']}
 
@@ -539,11 +569,11 @@ Closes {ticket['key']}"""
 
 ## Alternatives Considered
 
-{chr(10).join([f"### {alt['name']}\n**Pros:** {', '.join(alt['pros'])}\n**Cons:** {', '.join(alt['cons'])}\n**Effort:** {alt['effort']}" for alt in alternatives])}
+{alternatives_text}
 
 ## Stakeholder Perspectives
 
-{chr(10).join([f"**{s['name']}:** {s['reasoning']}\n*Concerns:* {', '.join(s['concerns'])}" for s in stakeholders])}
+{stakeholders_text}
 
 ## Decision
 We chose **{chosen['name']}** because it provides the best balance of technical quality and delivery speed.
@@ -699,7 +729,7 @@ We chose **{chosen['name']}** because it provides the best balance of technical 
                     self.org_id, repo_id, sha, message,
                     author["name"], author["email"], commit_date,
                     files_changed, random.randint(1, 50), random.randint(0, 20),
-                    [], {"orphaned": True}  # Empty ticket_references = orphaned!
+                    [], json.dumps({"orphaned": True})  # Empty ticket_references = orphaned!
                 )
             
             orphaned_count += 1
@@ -723,8 +753,96 @@ We chose **{chosen['name']}** because it provides the best balance of technical 
             
             repo_id = str(repo_row["id"])
         
-        # Generate code files for different categories
+        # Generate comprehensive code files matching commits
         file_templates = {
+            "oauth_service": {
+                "path": "src/auth/oauth.ts",
+                "content": '''import { OAuth2Client } from 'google-auth-library';
+import { AuthProvider } from './types';
+
+export class OAuthService {
+  private googleClient: OAuth2Client;
+  
+  constructor() {
+    this.googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+  }
+  
+  async authorize(provider: AuthProvider, code: string) {
+    if (provider === 'google') {
+      const { tokens } = await this.googleClient.getToken(code);
+      return this.storeTokens(tokens);
+    }
+    throw new Error('Unsupported provider');
+  }
+  
+  private async storeTokens(tokens: any) {
+    // Store encrypted tokens in database
+    return { accessToken: tokens.access_token };
+  }
+}''',
+                "language": "TypeScript",
+                "functions": ["authorize", "storeTokens"],
+                "classes": ["OAuthService"]
+            },
+            "rbac_middleware": {
+                "path": "src/auth/rbac.ts",
+                "content": '''import { Request, Response, NextFunction } from 'express';
+import { UserRole } from './types';
+
+export class RBACMiddleware {
+  static checkPermission(requiredRole: UserRole) {
+    return (req: Request, res: Response, next: NextFunction) => {
+      const userRole = req.user?.role;
+      if (!userRole || !this.hasPermission(userRole, requiredRole)) {
+        return res.status(403).json({ error: 'Insufficient permissions' });
+      }
+      next();
+    };
+  }
+  
+  private static hasPermission(userRole: UserRole, required: UserRole): boolean {
+    const hierarchy = { admin: 3, developer: 2, viewer: 1 };
+    return hierarchy[userRole] >= hierarchy[required];
+  }
+}''',
+                "language": "TypeScript",
+                "functions": ["checkPermission", "hasPermission"],
+                "classes": ["RBACMiddleware"]
+            },
+            "jwt_service": {
+                "path": "src/auth/jwt.ts",
+                "content": '''import jwt from 'jsonwebtoken';
+import { User } from './types';
+
+export class JWTService {
+  private secret: string;
+  
+  constructor() {
+    this.secret = process.env.JWT_SECRET || 'default-secret';
+  }
+  
+  sign(user: User): string {
+    return jwt.sign(
+      { id: user.id, email: user.email, role: user.role },
+      this.secret,
+      { expiresIn: '8h' }
+    );
+  }
+  
+  verify(token: string): any {
+    return jwt.verify(token, this.secret);
+  }
+  
+  refresh(oldToken: string): string {
+    const payload = this.verify(oldToken);
+    delete payload.exp;
+    return this.sign(payload);
+  }
+}''',
+                "language": "TypeScript",
+                "functions": ["sign", "verify", "refresh"],
+                "classes": ["JWTService"]
+            },
             "ml_model": {
                 "path": "src/ml/prediction_model.py",
                 "content": '''"""Ticket completion prediction model using Random Forest."""
@@ -793,6 +911,83 @@ async def get_code_hotspots(
                 "language": "Python",
                 "functions": ["predict_ticket_completion", "get_code_hotspots"],
                 "classes": []
+            },
+            "db_migration": {
+                "path": "migrations/001_postgresql_schema.sql",
+                "content": '''-- PostgreSQL schema migration
+CREATE TABLE IF NOT EXISTS users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email VARCHAR(255) UNIQUE NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  role VARCHAR(50) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_role ON users(role);
+
+-- Add audit logging
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id),
+  action VARCHAR(100) NOT NULL,
+  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+''',
+                "language": "SQL",
+                "functions": [],
+                "classes": []
+            },
+            "nlp_classifier": {
+                "path": "src/nlp/classifier.py",
+                "content": '''"""NLP-based ticket classification."""
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.naive_bayes import MultinomialNB
+import numpy as np
+
+class TicketClassifier:
+    def __init__(self):
+        self.vectorizer = TfidfVectorizer(max_features=1000)
+        self.classifier = MultinomialNB()
+        self.categories = ["bug", "feature", "tech_debt", "security", "performance"]
+    
+    def train(self, texts, labels):
+        X = self.vectorizer.fit_transform(texts)
+        self.classifier.fit(X, labels)
+    
+    def predict(self, text):
+        X = self.vectorizer.transform([text])
+        proba = self.classifier.predict_proba(X)[0]
+        return {cat: float(prob) for cat, prob in zip(self.categories, proba)}
+''',
+                "language": "Python",
+                "functions": ["train", "predict"],
+                "classes": ["TicketClassifier"]
+            },
+            "gap_detector": {
+                "path": "src/analysis/gap_detector.py",
+                "content": '''"""Detect gaps in documentation and ticket coverage."""
+import re
+from typing import List, Dict
+
+class GapDetector:
+    def __init__(self, db_service):
+        self.db = db_service
+        self.ticket_pattern = re.compile(r'[A-Z]+-\\d+')
+    
+    async def find_orphaned_commits(self, org_id: str) -> List[Dict]:
+        """Find commits without ticket references."""
+        query = "SELECT * FROM commits WHERE organization_id = $1 AND ticket_references = '{}'"
+        return await self.db.fetch_all(query, org_id)
+    
+    async def find_undocumented_features(self, org_id: str) -> List[Dict]:
+        """Find features implemented but not documented."""
+        # Compare commits with documentation
+        pass
+''',
+                "language": "Python",
+                "functions": ["find_orphaned_commits", "find_undocumented_features"],
+                "classes": ["GapDetector"]
             }
         }
         
@@ -821,12 +1016,17 @@ async def get_code_hotspots(
                         last_modified, metadata
                     )
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                    ON CONFLICT (repository_id, file_path) DO NOTHING
+                    ON CONFLICT (repository_id, file_path) DO UPDATE SET
+                        content = EXCLUDED.content,
+                        functions = EXCLUDED.functions,
+                        classes = EXCLUDED.classes,
+                        line_count = EXCLUDED.line_count,
+                        last_modified = EXCLUDED.last_modified
                 """,
                     repo_id, self.org_id, file_data["file_path"], file_data["file_name"],
                     file_data["file_type"], file_data["language"], file_data["content"],
                     file_data["functions"], file_data["classes"], file_data["imports"],
-                    file_data["line_count"], file_data["last_modified"], file_data["metadata"]
+                    file_data["line_count"], file_data["last_modified"], json.dumps(file_data["metadata"])
                 )
             
             code_files.append(file_data)

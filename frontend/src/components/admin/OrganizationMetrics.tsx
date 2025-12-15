@@ -19,7 +19,9 @@ export default function OrganizationMetrics() {
     setError(null)
 
     try {
-      const data = await adminApi.getOrganizationMetrics()
+      const response: any = await adminApi.getOrganizationMetrics()
+      // API returns data wrapped in {success, data: {...}} structure
+      const data = response.data || response
       setMetrics(data)
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to load organization metrics')
@@ -49,15 +51,15 @@ export default function OrganizationMetrics() {
 
   if (!metrics) return null
 
-  const { organization, users, usage_stats } = metrics
+  const { organization, total_users, users, usage_stats } = metrics as any
 
   // Prepare chart data
-  const userRequestData = usage_stats.user_requests?.slice(0, 10).map(ur => ({
+  const userRequestData = usage_stats.user_requests?.slice(0, 10).map((ur: any) => ({
     name: ur.name.split(' ')[0], // First name only
     requests: ur.request_count,
   }))
 
-  const activityData = usage_stats.recent_activity?.map(activity => ({
+  const activityData = usage_stats.recent_activity?.map((activity: any) => ({
     date: new Date(activity.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
     requests: activity.requests,
   }))
@@ -118,7 +120,7 @@ export default function OrganizationMetrics() {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {users.map((user) => (
+              {users.map((user: any) => (
                 <tr key={user.id}>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm font-medium text-gray-900">{user.name}</div>

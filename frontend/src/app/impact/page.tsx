@@ -126,38 +126,53 @@ function FileImpact() {
         )}
       </div>
 
-      {result && (
+      {result && result.history && (
         <div className="mt-8 space-y-6">
           <div className="grid grid-cols-4 gap-4">
             <div className="bg-gray-50 rounded p-4">
               <div className="text-sm text-gray-500">Total Commits</div>
-              <div className="text-2xl font-bold text-gray-900">{result.total_commits || 0}</div>
+              <div className="text-2xl font-bold text-gray-900">{result.history.total_commits || 0}</div>
             </div>
             <div className="bg-gray-50 rounded p-4">
               <div className="text-sm text-gray-500">Related Tickets</div>
-              <div className="text-2xl font-bold text-gray-900">{result.related_tickets?.length || 0}</div>
+              <div className="text-2xl font-bold text-gray-900">{result.history.tickets?.length || 0}</div>
             </div>
             <div className="bg-gray-50 rounded p-4">
               <div className="text-sm text-gray-500">Developers</div>
-              <div className="text-2xl font-bold text-gray-900">{result.top_developers?.length || 0}</div>
+              <div className="text-2xl font-bold text-gray-900">{result.history.developers?.length || 0}</div>
             </div>
             <div className="bg-gray-50 rounded p-4">
-              <div className="text-sm text-gray-500">Co-changed Files</div>
-              <div className="text-2xl font-bold text-gray-900">{result.frequently_changed_with?.length || 0}</div>
+              <div className="text-sm text-gray-500">Commits</div>
+              <div className="text-2xl font-bold text-gray-900">{result.history.commits?.length || 0}</div>
             </div>
           </div>
 
-          <div>
-            <h3 className="font-medium text-gray-900 mb-3">Top Developers</h3>
-            <div className="space-y-2">
-              {result.top_developers?.slice(0, 5).map((dev: any, i: number) => (
-                <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded">
-                  <span className="text-gray-900">{dev.email}</span>
-                  <span className="text-sm text-gray-600">{dev.commit_count} commits</span>
-                </div>
-              ))}
+          {result.history.developers && result.history.developers.length > 0 && (
+            <div>
+              <h3 className="font-medium text-gray-900 mb-3">Top Developers</h3>
+              <div className="space-y-2">
+                {result.history.developers.slice(0, 5).map((dev: any, i: number) => (
+                  <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded">
+                    <span className="text-gray-900">{dev.name} ({dev.email})</span>
+                    <span className="text-sm text-gray-600">{dev.commit_count} commits</span>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
+
+          {result.history.tickets && result.history.tickets.length > 0 && (
+            <div>
+              <h3 className="font-medium text-gray-900 mb-3">Related Tickets</h3>
+              <div className="flex flex-wrap gap-2">
+                {result.history.tickets.map((ticket: string, i: number) => (
+                  <span key={i} className="px-3 py-1 bg-indigo-100 text-indigo-800 rounded-full text-sm">
+                    {ticket}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -234,11 +249,10 @@ function TicketImpact() {
         )}
       </div>
 
-      {result && (
+      {result && result.relationships && (
         <div className="mt-8 space-y-6">
           <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
             <div className="font-medium text-blue-900">{result.ticket_key}</div>
-            <div className="text-sm text-blue-700 mt-1">{result.summary}</div>
           </div>
 
           {/* Risk Assessment Panel */}
@@ -284,30 +298,51 @@ function TicketImpact() {
 
           <div className="grid grid-cols-4 gap-4">
             <div className="bg-gray-50 rounded p-4">
+              <div className="text-sm text-gray-500">Commits</div>
+              <div className="text-2xl font-bold text-gray-900">{result.relationships.commits?.length || 0}</div>
+            </div>
+            <div className="bg-gray-50 rounded p-4">
               <div className="text-sm text-gray-500">Files Affected</div>
-              <div className="text-2xl font-bold text-gray-900">{result.file_count || 0}</div>
+              <div className="text-2xl font-bold text-gray-900">{result.relationships.code_files?.length || 0}</div>
             </div>
             <div className="bg-gray-50 rounded p-4">
-              <div className="text-sm text-gray-500">Total Changes</div>
-              <div className="text-2xl font-bold text-gray-900">{result.total_changes?.toLocaleString() || 0}</div>
+              <div className="text-sm text-gray-500">Developers</div>
+              <div className="text-2xl font-bold text-gray-900">{result.relationships.developers?.length || 0}</div>
             </div>
             <div className="bg-gray-50 rounded p-4">
-              <div className="text-sm text-gray-500">Similar Tickets</div>
-              <div className="text-2xl font-bold text-gray-900">{result.similar_tickets?.length || 0}</div>
-            </div>
-            <div className="bg-gray-50 rounded p-4">
-              <div className="text-sm text-gray-500">Dependencies</div>
-              <div className="text-2xl font-bold text-gray-900">{result.dependent_tickets?.length || 0}</div>
+              <div className="text-sm text-gray-500">Pull Requests</div>
+              <div className="text-2xl font-bold text-gray-900">{result.relationships.pull_requests?.length || 0}</div>
             </div>
           </div>
 
-          {result.blast_radius && (
-            <div className={`p-4 rounded-lg ${
-              result.blast_radius.includes('Small') ? 'bg-green-50 border border-green-200' :
-              result.blast_radius.includes('Medium') ? 'bg-yellow-50 border border-yellow-200' :
-              'bg-red-50 border border-red-200'
-            }`}>
-              <div className="font-medium">📊 Blast Radius: {result.blast_radius}</div>
+          {result.relationships.code_files && result.relationships.code_files.length > 0 && (
+            <div>
+              <h3 className="font-medium text-gray-900 mb-3">Affected Files</h3>
+              <div className="space-y-2">
+                {result.relationships.code_files.map((file: any, i: number) => (
+                  <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded">
+                    <span className="text-gray-900 font-mono text-sm">{file.file_path}</span>
+                    <span className="text-sm text-gray-600">{file.modification_count} changes</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {result.relationships.developers && result.relationships.developers.length > 0 && (
+            <div>
+              <h3 className="font-medium text-gray-900 mb-3">Contributors</h3>
+              <div className="space-y-2">
+                {result.relationships.developers.map((dev: any, i: number) => (
+                  <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded">
+                    <div>
+                      <div className="text-gray-900">{dev.name}</div>
+                      <div className="text-sm text-gray-600">{dev.email}</div>
+                    </div>
+                    <span className="text-sm text-gray-600">{dev.commit_count} commits</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>

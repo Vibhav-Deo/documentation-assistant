@@ -18,7 +18,9 @@ export default function RequestMetrics() {
     setError(null)
 
     try {
-      const data = await adminApi.getRequestMetrics(timePeriod)
+      const response: any = await adminApi.getRequestMetrics(timePeriod)
+      // API returns data wrapped in {success, data: {...}} structure
+      const data = response.data || response
       setMetrics(data)
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to load request metrics')

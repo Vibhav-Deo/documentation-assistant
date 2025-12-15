@@ -7,6 +7,7 @@ Handles gap detection endpoints for finding missing work, orphaned tickets, and 
 from fastapi import APIRouter, HTTPException, Depends, Query as QueryParam
 from models import User
 from services.shared.auth import get_current_user
+from dependencies.container import get_gap_detector
 
 router = APIRouter(prefix="/gaps", tags=["gap-detection"])
 
@@ -14,7 +15,8 @@ router = APIRouter(prefix="/gaps", tags=["gap-detection"])
 @router.get("/orphaned-tickets")
 async def get_orphaned_tickets(
     days: int = QueryParam(default=90, ge=1, le=365),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    gap_detector = Depends(get_gap_detector)
 ):
     """
     Find orphaned tickets (tickets without related commits).
@@ -23,19 +25,19 @@ async def get_orphaned_tickets(
     development work (commits) within the specified time window.
     """
     try:
-        from services.domain.analytics import gap_detector
-        
-        if not gap_detector:
-            raise HTTPException(status_code=503, detail="Gap detector not available")
-        
-        orphaned_tickets = await gap_detector.find_orphaned_tickets(
+        result = await gap_detector.find_orphaned_tickets(
             current_user.organization_id, days
         )
         
         return {
-            "orphaned_tickets": orphaned_tickets,
-            "count": len(orphaned_tickets),
+            "orphaned_tickets": result.get("tickets", []),
+            "count": result.get("total_orphaned", 0),
             "time_window_days": days,
+            "statistics": {
+                "by_status": result.get("by_status", {}),
+                "by_priority": result.get("by_priority", {}),
+                "by_assignee": result.get("by_assignee", {})
+            },
             "analysis_metadata": {
                 "criteria": f"Tickets created in last {days} days with no related commits",
                 "organization_id": current_user.organization_id
@@ -48,7 +50,8 @@ async def get_orphaned_tickets(
 
 @router.get("/undocumented")
 async def get_undocumented_features(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    gap_detector = Depends(get_gap_detector)
 ):
     """
     Find undocumented features (commits without ticket references).
@@ -57,18 +60,18 @@ async def get_undocumented_features(
     tracked through tickets or documentation.
     """
     try:
-        from services.domain.analytics import gap_detector
-        
-        if not gap_detector:
-            raise HTTPException(status_code=503, detail="Gap detector not available")
-        
-        undocumented_commits = await gap_detector.find_undocumented_commits(
+        result = await gap_detector.find_undocumented_features(
             current_user.organization_id
         )
         
         return {
-            "undocumented_commits": undocumented_commits,
-            "count": len(undocumented_commits),
+            "undocumented_commits": result.get("commits", []),
+            "count": result.get("total_undocumented", 0),
+            "statistics": {
+                "by_author": result.get("by_author", {}),
+                "by_repository": result.get("by_repository", {}),
+                "total_code_changes": result.get("total_code_changes", 0)
+            },
             "analysis_metadata": {
                 "criteria": "Commits without ticket references or documentation",
                 "organization_id": current_user.organization_id
@@ -81,7 +84,8 @@ async def get_undocumented_features(
 
 @router.get("/missing-decisions")
 async def get_missing_decisions(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    gap_detector = Depends(get_gap_detector)
 ):
     """
     Find tickets that need decision analysis.
@@ -90,18 +94,16 @@ async def get_missing_decisions(
     documented decision rationale.
     """
     try:
-        from services.domain.analytics import gap_detector
-        
-        if not gap_detector:
-            raise HTTPException(status_code=503, detail="Gap detector not available")
-        
-        missing_decisions = await gap_detector.find_missing_decisions(
+        result = await gap_detector.find_missing_decisions(
             current_user.organization_id
         )
         
         return {
-            "missing_decisions": missing_decisions,
-            "count": len(missing_decisions),
+            "missing_decisions": result.get("tickets", []),
+            "count": result.get("total_missing_decisions", 0),
+            "statistics": {
+                "by_issue_type": result.get("by_issue_type", {})
+            },
             "analysis_metadata": {
                 "criteria": "Tickets with implementation but no decision analysis",
                 "organization_id": current_user.organization_id
@@ -115,7 +117,8 @@ async def get_missing_decisions(
 @router.get("/stale-work")
 async def get_stale_work(
     days: int = QueryParam(default=30, ge=1, le=365),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    gap_detector = Depends(get_gap_detector)
 ):
     """
     Find stale work items (tickets not updated recently).
@@ -124,19 +127,18 @@ async def get_stale_work(
     updated within the specified time window.
     """
     try:
-        from services.domain.analytics import gap_detector
-        
-        if not gap_detector:
-            raise HTTPException(status_code=503, detail="Gap detector not available")
-        
-        stale_tickets = await gap_detector.find_stale_tickets(
+        result = await gap_detector.find_stale_work(
             current_user.organization_id, days
         )
         
         return {
-            "stale_tickets": stale_tickets,
-            "count": len(stale_tickets),
+            "stale_tickets": result.get("tickets", []),
+            "count": result.get("total_stale", 0),
             "time_window_days": days,
+            "statistics": {
+                "by_status": result.get("by_status", {}),
+                "by_assignee": result.get("by_assignee", {})
+            },
             "analysis_metadata": {
                 "criteria": f"In-progress tickets not updated in last {days} days",
                 "organization_id": current_user.organization_id
@@ -149,7 +151,8 @@ async def get_stale_work(
 
 @router.get("/comprehensive")
 async def get_comprehensive_gaps(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    gap_detector = Depends(get_gap_detector)
 ):
     """
     Get a comprehensive gap analysis across all categories.
@@ -158,61 +161,46 @@ async def get_comprehensive_gaps(
     development process.
     """
     try:
-        from services.domain.analytics import gap_detector
-        
-        if not gap_detector:
-            raise HTTPException(status_code=503, detail="Gap detector not available")
-        
-        # Get all types of gaps
-        orphaned_tickets = await gap_detector.find_orphaned_tickets(
-            current_user.organization_id, 90
-        )
-        
-        undocumented_commits = await gap_detector.find_undocumented_commits(
+        # Get comprehensive gaps from detector
+        result = await gap_detector.get_comprehensive_gaps(
             current_user.organization_id
-        )
-        
-        missing_decisions = await gap_detector.find_missing_decisions(
-            current_user.organization_id
-        )
-        
-        stale_tickets = await gap_detector.find_stale_tickets(
-            current_user.organization_id, 30
-        )
-        
-        # Calculate summary statistics
-        total_gaps = (
-            len(orphaned_tickets) + 
-            len(undocumented_commits) + 
-            len(missing_decisions) + 
-            len(stale_tickets)
         )
         
         return {
             "comprehensive_analysis": {
                 "orphaned_tickets": {
-                    "items": orphaned_tickets,
-                    "count": len(orphaned_tickets)
+                    "items": result["orphaned_tickets"].get("tickets", []),
+                    "count": result["orphaned_tickets"].get("total_orphaned", 0),
+                    "statistics": {
+                        "by_status": result["orphaned_tickets"].get("by_status", {}),
+                        "by_priority": result["orphaned_tickets"].get("by_priority", {})
+                    }
                 },
                 "undocumented_commits": {
-                    "items": undocumented_commits,
-                    "count": len(undocumented_commits)
+                    "items": result["undocumented_features"].get("commits", []),
+                    "count": result["undocumented_features"].get("total_undocumented", 0),
+                    "statistics": {
+                        "by_author": result["undocumented_features"].get("by_author", {}),
+                        "by_repository": result["undocumented_features"].get("by_repository", {})
+                    }
                 },
                 "missing_decisions": {
-                    "items": missing_decisions,
-                    "count": len(missing_decisions)
+                    "items": result["missing_decisions"].get("tickets", []),
+                    "count": result["missing_decisions"].get("total_missing_decisions", 0),
+                    "statistics": {
+                        "by_issue_type": result["missing_decisions"].get("by_issue_type", {})
+                    }
                 },
                 "stale_tickets": {
-                    "items": stale_tickets,
-                    "count": len(stale_tickets)
+                    "items": result["stale_work"].get("tickets", []),
+                    "count": result["stale_work"].get("total_stale", 0),
+                    "statistics": {
+                        "by_status": result["stale_work"].get("by_status", {}),
+                        "by_assignee": result["stale_work"].get("by_assignee", {})
+                    }
                 }
             },
-            "summary": {
-                "total_gaps": total_gaps,
-                "gap_categories": 4,
-                "organization_id": current_user.organization_id,
-                "analysis_timestamp": "now"  # Would use actual timestamp
-            }
+            "summary": result.get("summary", {})
         }
         
     except Exception as e:

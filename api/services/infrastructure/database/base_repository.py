@@ -367,12 +367,12 @@ class OrganizationScopedRepository(BaseRepository):
             all_args = (org_id,)
         
         return await self.select(
-            table=table,
-            columns=columns,
-            where_clause=full_where,
-            order_by=order_by,
-            limit=limit,
-            offset=offset,
+            table,
+            columns,
+            full_where,
+            order_by,
+            limit,
+            offset,
             *all_args
         )
     

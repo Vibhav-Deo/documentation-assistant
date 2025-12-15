@@ -140,10 +140,10 @@ function GapsContent() {
           </div>
 
           <div className="p-6">
-            {activeTab === 'orphaned' && <OrphanedTickets data={data?.orphaned_tickets} />}
-            {activeTab === 'undocumented' && <UndocumentedFeatures data={data?.undocumented_features} />}
-            {activeTab === 'decisions' && <MissingDecisions data={data?.missing_decisions} />}
-            {activeTab === 'stale' && <StaleWork data={data?.stale_work} />}
+            {activeTab === 'orphaned' && <OrphanedTickets data={data?.comprehensive_analysis?.orphaned_tickets} />}
+            {activeTab === 'undocumented' && <UndocumentedFeatures data={data?.comprehensive_analysis?.undocumented_commits} />}
+            {activeTab === 'decisions' && <MissingDecisions data={data?.comprehensive_analysis?.missing_decisions} />}
+            {activeTab === 'stale' && <StaleWork data={data?.comprehensive_analysis?.stale_tickets} />}
             {activeTab === 'predictions' && (
               <PredictionsTab 
                 data={predictionsData} 
@@ -159,8 +159,8 @@ function GapsContent() {
 }
 
 function OrphanedTickets({ data }: { data: any }) {
-  const tickets = data?.tickets || []
-  const total = data?.total_orphaned || 0
+  const tickets = data?.items || []
+  const total = data?.count || 0
   const [riskScores, setRiskScores] = useState<Record<string, any>>({})
   const [loadingRisk, setLoadingRisk] = useState<Record<string, boolean>>({})
 
@@ -187,13 +187,13 @@ function OrphanedTickets({ data }: { data: any }) {
       <div className="grid grid-cols-2 gap-4 mb-6">
         <div>
           <h3 className="font-medium text-gray-900 mb-2">By Status</h3>
-          {Object.entries(data?.by_status || {}).map(([status, count]: any) => (
+          {Object.entries(data?.statistics?.by_status || {}).map(([status, count]: any) => (
             <div key={status} className="text-sm text-gray-600">• {status}: {count}</div>
           ))}
         </div>
         <div>
           <h3 className="font-medium text-gray-900 mb-2">By Priority</h3>
-          {Object.entries(data?.by_priority || {}).map(([priority, count]: any) => (
+          {Object.entries(data?.statistics?.by_priority || {}).map(([priority, count]: any) => (
             <div key={priority} className="text-sm text-gray-600">• {priority}: {count}</div>
           ))}
         </div>
@@ -241,8 +241,8 @@ function OrphanedTickets({ data }: { data: any }) {
 }
 
 function UndocumentedFeatures({ data }: { data: any }) {
-  const commits = data?.commits || []
-  const total = data?.total_undocumented || 0
+  const commits = data?.items || []
+  const total = data?.count || 0
 
   if (total === 0) {
     return <div className="text-center py-12 text-green-600">✅ All commits are documented!</div>
@@ -257,7 +257,7 @@ function UndocumentedFeatures({ data }: { data: any }) {
         </div>
         <div className="bg-gray-50 rounded p-4">
           <div className="text-sm text-gray-500">Code Changes</div>
-          <div className="text-2xl font-bold text-gray-900">{data?.total_code_changes?.toLocaleString() || 0}</div>
+          <div className="text-2xl font-bold text-gray-900">{data?.statistics?.total_code_changes?.toLocaleString() || 0}</div>
         </div>
       </div>
 
@@ -275,8 +275,8 @@ function UndocumentedFeatures({ data }: { data: any }) {
 }
 
 function MissingDecisions({ data }: { data: any }) {
-  const tickets = data?.tickets || []
-  const total = data?.total_missing_decisions || 0
+  const tickets = data?.items || []
+  const total = data?.count || 0
 
   if (total === 0) {
     return <div className="text-center py-12 text-green-600">✅ All tickets have decision analysis!</div>
@@ -301,8 +301,8 @@ function MissingDecisions({ data }: { data: any }) {
 }
 
 function StaleWork({ data }: { data: any }) {
-  const tickets = data?.tickets || []
-  const total = data?.total_stale || 0
+  const tickets = data?.items || []
+  const total = data?.count || 0
 
   if (total === 0) {
     return <div className="text-center py-12 text-green-600">✅ No stale work found!</div>

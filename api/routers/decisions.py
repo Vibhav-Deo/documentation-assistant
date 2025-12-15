@@ -131,10 +131,9 @@ async def list_decisions(
 ):
     """List all decisions for the organization"""
     try:
-        decisions = await db_service.list_decisions(
+        decisions = await db_service.get_all_decisions(
             current_user.organization_id,
-            limit=limit,
-            offset=offset
+            limit=limit
         )
         
         return {
@@ -163,6 +162,7 @@ async def analyze_ticket_decision_enhanced(
     try:
         # Get the unified intent analyzer (using enhanced mode)
         from dependencies.container import get_unified_intent_analyzer
+        from dataclasses import asdict
         unified_analyzer = await get_unified_intent_analyzer()
         
         # Analyze ticket decisions using enhanced mode
@@ -173,17 +173,20 @@ async def analyze_ticket_decision_enhanced(
             enhanced=True  # Use enhanced mode for confidence scoring and conflict detection
         )
         
+        # Convert dataclass to dict for JSON serialization
+        decision_dict = asdict(enhanced_decision)
+        
         return {
-            "decision_id": enhanced_decision.get("decision_id", ""),
+            "decision_id": decision_dict.get("decision_id", ""),
             "ticket_key": ticket_key,
-            "enhanced_decision": enhanced_decision,
-            "conflicts_detected": enhanced_decision.get("conflicts_detected", []),
-            "overall_confidence": enhanced_decision.get("overall_confidence", 0.0),
+            "enhanced_decision": decision_dict,
+            "conflicts_detected": decision_dict.get("conflicts_detected", []),
+            "overall_confidence": decision_dict.get("overall_confidence", 0.0),
             "analysis_metadata": {
-                "related_commits": len(enhanced_decision.get("implementation_commits", [])),
-                "related_prs": len(enhanced_decision.get("related_prs", [])),
+                "related_commits": len(decision_dict.get("implementation_commits", [])),
+                "related_prs": len(decision_dict.get("related_prs", [])),
                 "related_docs": 0,
-                "conflicts_count": len(enhanced_decision.get("conflicts_detected", []))
+                "conflicts_count": len(decision_dict.get("conflicts_detected", []))
             }
         }
         

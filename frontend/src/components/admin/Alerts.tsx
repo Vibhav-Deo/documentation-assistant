@@ -17,8 +17,10 @@ export default function Alerts() {
     setError(null)
 
     try {
-      const data = await adminApi.getAlerts()
-      setAlerts(data)
+      const response: any = await adminApi.getAlerts()
+      // API returns data wrapped in {success, data: [...]} structure
+      const data = response.data || response
+      setAlerts(Array.isArray(data) ? data : [])
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to load alerts')
     } finally {
